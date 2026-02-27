@@ -2,6 +2,7 @@
 import tempfile
 from pathlib import Path
 from localarchive.db.database import Database
+from localarchive.db.search import SearchEngine
 
 
 def _get_test_db():
@@ -61,4 +62,25 @@ def test_search_fts():
         "SELECT * FROM documents_fts WHERE documents_fts MATCH ?", ("Acme",)
     ).fetchall()
     assert len(rows) > 0
+    db.close()
+
+
+def test_search_by_tag_and_field():
+    db = _get_test_db()
+    doc_id = db.insert_document(
+        filename="receipt.pdf", filepath="/tmp/receipt.pdf", file_hash="search123",
+        file_type="pdf", file_size=321, ingested_at="2026-01-01T00:00:00Z",
+        status="processed", ocr_text="Receipt from Clinic total $99.99",
+    )
+    db.add_tag(doc_id, "medical")
+    db.insert_fields(
+        doc_id,
+        [{"field_type": "amount", "value": "$99.99", "raw_match": "$99.99", "start": 10}],
+    )
+
+    search = SearchEngine(db)
+    by_tag = search.by_tag("medical")
+    by_field = search.by_field("amount", "99.99")
+    assert any(d["id"] == doc_id for d in by_tag)
+    assert any(d["id"] == doc_id for d in by_field)
     db.close()

@@ -1,0 +1,88 @@
+"""Tests for LocalArchive FastAPI UI routes."""
+
+import uuid
+from pathlib import Path
+import pytest
+
+from localarchive.config import Config
+from localarchive.db.database import Database
+
+
+def _seed_db(db: Database):
+    doc_id = db.insert_document(
+        filename="invoice.pdf",
+        filepath="/tmp/invoice.pdf",
+        file_hash="ui-hash-1",
+        file_type="pdf",
+        file_size=123,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="Acme invoice 2026 amount $42.00",
+    )
+    db.add_tag(doc_id, "finance")
+    db.insert_fields(
+        doc_id,
+        [{"field_type": "amount", "value": "$42.00", "raw_match": "$42.00", "start": 20}],
+    )
+    return doc_id
+
+
+def _workspace_tmp_dir(prefix: str) -> Path:
+    root = Path.cwd() / ".test_tmp"
+    root.mkdir(exist_ok=True)
+    path = root / f"{prefix}-{uuid.uuid4().hex[:8]}"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def test_ui_index_and_search():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi.testclient")
+    from fastapi.testclient import TestClient
+    from localarchive.ui.app import create_app
+
+    tmp_path = _workspace_tmp_dir("localarchive-ui")
+    db_path = tmp_path / "ui.db"
+    config = Config(archive_dir=tmp_path / "archive", db_path=db_path)
+    db = Database(db_path)
+    db.initialize()
+    _seed_db(db)
+    db.close()
+
+    app = create_app(config)
+    client = TestClient(app)
+
+    res = client.get("/")
+    assert res.status_code == 200
+    assert "LocalArchive" in res.text
+    assert "invoice.pdf" in res.text
+
+    res = client.get("/", params={"q": "Acme", "tag": "finance", "file_type": "pdf"})
+    assert res.status_code == 200
+    assert "invoice.pdf" in res.text
+
+
+def test_ui_document_detail():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi.testclient")
+    from fastapi.testclient import TestClient
+    from localarchive.ui.app import create_app
+
+    tmp_path = _workspace_tmp_dir("localarchive-ui-detail")
+    db_path = tmp_path / "ui-detail.db"
+    config = Config(archive_dir=tmp_path / "archive", db_path=db_path)
+    db = Database(db_path)
+    db.initialize()
+    doc_id = _seed_db(db)
+    db.close()
+
+    app = create_app(config)
+    client = TestClient(app)
+
+    res = client.get(f"/documents/{doc_id}")
+    assert res.status_code == 200
+    assert "Extracted Fields" in res.text
+    assert "$42.00" in res.text
+
+    res = client.get("/documents/99999")
+    assert res.status_code == 404

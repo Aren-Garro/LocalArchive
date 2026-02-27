@@ -1,6 +1,6 @@
 """
 LocalArchive CLI - main entry point.
-Commands: init, ingest, search, export, tag, process, serve
+Commands: init, ingest, search, export, tag, process, watch, serve
 """
 
 import click
@@ -10,7 +10,7 @@ from rich.table import Table
 from localarchive.config import Config
 from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
-from localarchive.core.ingester import Ingester
+from localarchive.core.ingester import Ingester, watch_directory
 
 console = Console()
 
@@ -132,7 +132,14 @@ def tag(doc_id: int, tags: tuple[str]):
 
 @main.command()
 @click.option("--limit", default=50, help="Max documents to process")
-def process(limit: int):
+@click.option(
+    "--extractor",
+    "extractor_mode",
+    type=click.Choice(["regex", "spacy", "ollama", "hybrid"]),
+    default=None,
+    help="Extraction strategy (defaults to config.extraction.strategy).",
+)
+def process(limit: int, extractor_mode: str | None):
     """Run OCR and field extraction on pending documents."""
     from localarchive.core.ocr_engine import get_ocr_engine, pdf_to_images, extract_text_from_pdf_native
     from localarchive.core.extractor import extract_fields
@@ -163,7 +170,8 @@ def process(limit: int):
             else:
                 entries = ocr.extract_text(filepath)
                 full_text = " ".join(e["text"] for e in entries)
-            fields = extract_fields(full_text)
+            mode = extractor_mode or config.extraction.strategy
+            fields = extract_fields(full_text, mode=mode, config=config.extraction)
             field_dicts = [
                 {"field_type": f.field_type, "value": f.value, "raw_match": f.raw_match, "start": f.start}
                 for f in fields
@@ -177,6 +185,24 @@ def process(limit: int):
             console.print(f"[red]error: {e}[/red]")
     db.close()
     console.print("\n[green]Processing complete.[/green]")
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--interval", type=int, default=None, help="Polling interval in seconds.")
+@click.option("--once", is_flag=True, help="Run a single scan cycle and exit.")
+def watch(path: Path, interval: int | None, once: bool):
+    """Watch a folder and ingest newly discovered files."""
+    config = get_config()
+    config.ensure_dirs()
+    db = get_db(config)
+    ingester = Ingester(config, db)
+    poll_interval = interval if interval is not None else config.watch.interval_seconds
+    try:
+        total = watch_directory(ingester, path=path, interval_seconds=poll_interval, run_once=once)
+        console.print(f"[green]Watcher finished. New documents ingested: {total}[/green]")
+    finally:
+        db.close()
 
 
 @main.command()

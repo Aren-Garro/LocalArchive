@@ -4,7 +4,9 @@ Pulls dates, amounts, emails, phones from raw OCR text using regex.
 """
 
 import re
+import json
 from dataclasses import dataclass
+from localarchive.config import ExtractionConfig
 
 
 @dataclass
@@ -34,7 +36,7 @@ EMAIL_PATTERN = r"\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b"
 PHONE_PATTERN = r"\b(\+?\d?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})\b"
 
 
-def extract_fields(text: str) -> list[ExtractedField]:
+def _extract_fields_regex(text: str) -> list[ExtractedField]:
     """Extract structured fields from raw text using regex."""
     fields = []
 
@@ -68,7 +70,7 @@ def extract_fields_with_spacy(text: str) -> list[ExtractedField]:
     try:
         import spacy
         nlp = spacy.load("en_core_web_sm")
-    except (ImportError, OSError):
+    except Exception:
         return []
 
     doc = nlp(text[:100000])
@@ -79,3 +81,86 @@ def extract_fields_with_spacy(text: str) -> list[ExtractedField]:
                 f"entity_{ent.label_.lower()}", ent.text, ent.text, ent.start_char, ent.end_char
             ))
     return fields
+
+
+def extract_fields_with_ollama(text: str, model: str = "mistral") -> list[ExtractedField]:
+    """Extract fields using a local Ollama model. Returns [] when unavailable or invalid output."""
+    try:
+        import ollama
+    except ImportError:
+        return []
+
+    prompt = (
+        "Extract structured fields from the text below. "
+        "Return ONLY JSON array items with keys: field_type, value, raw_match, start, end. "
+        "Allowed field_type values: date, amount, email, phone, entity_person, entity_org, entity_gpe.\n\n"
+        f"TEXT:\n{text[:8000]}"
+    )
+    try:
+        response = ollama.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0},
+        )
+        content = response.get("message", {}).get("content", "[]").strip()
+        payload = json.loads(content)
+    except Exception:
+        return []
+
+    fields: list[ExtractedField] = []
+    if not isinstance(payload, list):
+        return fields
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        field_type = str(item.get("field_type", "")).strip().lower()
+        value = str(item.get("value", "")).strip()
+        if not field_type or not value:
+            continue
+        raw_match = str(item.get("raw_match", value))
+        try:
+            start = int(item.get("start", 0))
+            end = int(item.get("end", start + len(value)))
+        except (TypeError, ValueError):
+            start = 0
+            end = len(value)
+        fields.append(ExtractedField(field_type, value, raw_match, start, end))
+    return fields
+
+
+def _dedupe_fields(fields: list[ExtractedField]) -> list[ExtractedField]:
+    seen = set()
+    unique = []
+    for field in fields:
+        key = (field.field_type, field.value)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(field)
+    return unique
+
+
+def extract_fields(
+    text: str,
+    mode: str = "regex",
+    config: ExtractionConfig | None = None,
+) -> list[ExtractedField]:
+    """Extract fields using one of: regex, spacy, ollama, hybrid."""
+    mode = (mode or "regex").lower()
+    cfg = config or ExtractionConfig()
+
+    regex_fields = _extract_fields_regex(text)
+    if mode == "regex":
+        return regex_fields
+    if mode == "spacy":
+        return _dedupe_fields(extract_fields_with_spacy(text))
+    if mode == "ollama":
+        fields = extract_fields_with_ollama(text, model=cfg.ollama_model)
+        return _dedupe_fields(fields or regex_fields)
+    if mode == "hybrid":
+        fields = regex_fields + extract_fields_with_spacy(text)
+        if cfg.use_local_llm:
+            fields += extract_fields_with_ollama(text, model=cfg.ollama_model)
+        return _dedupe_fields(fields)
+
+    return regex_fields

@@ -28,6 +28,12 @@ class OCRConfig:
 class ExtractionConfig:
     use_local_llm: bool = False
     ollama_model: str = "mistral"
+    strategy: str = "regex"
+
+
+@dataclass
+class WatchConfig:
+    interval_seconds: int = 5
 
 
 @dataclass
@@ -43,6 +49,7 @@ class Config:
     ocr: OCRConfig = field(default_factory=OCRConfig)
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    watch: WatchConfig = field(default_factory=WatchConfig)
 
     @classmethod
     def load(cls, config_path: Path = DEFAULT_CONFIG_PATH) -> "Config":
@@ -67,12 +74,18 @@ class Config:
                 config.extraction = ExtractionConfig(
                     use_local_llm=ext_data.get("use_local_llm", config.extraction.use_local_llm),
                     ollama_model=ext_data.get("ollama_model", config.extraction.ollama_model),
+                    strategy=ext_data.get("strategy", config.extraction.strategy),
                 )
             ui_data = data.get("ui", {})
             if ui_data:
                 config.ui = UIConfig(
                     host=ui_data.get("host", config.ui.host),
                     port=ui_data.get("port", config.ui.port),
+                )
+            watch_data = data.get("watch", {})
+            if watch_data:
+                config.watch = WatchConfig(
+                    interval_seconds=int(watch_data.get("interval_seconds", config.watch.interval_seconds)),
                 )
         return config
 
@@ -87,8 +100,13 @@ class Config:
         data = {
             "general": {"archive_dir": str(self.archive_dir), "db_path": str(self.db_path)},
             "ocr": {"engine": self.ocr.engine, "languages": self.ocr.languages, "confidence_threshold": self.ocr.confidence_threshold},
-            "extraction": {"use_local_llm": self.extraction.use_local_llm, "ollama_model": self.extraction.ollama_model},
+            "extraction": {
+                "use_local_llm": self.extraction.use_local_llm,
+                "ollama_model": self.extraction.ollama_model,
+                "strategy": self.extraction.strategy,
+            },
             "ui": {"host": self.ui.host, "port": self.ui.port},
+            "watch": {"interval_seconds": self.watch.interval_seconds},
         }
         with open(config_path, "w") as f:
             toml.dump(data, f)

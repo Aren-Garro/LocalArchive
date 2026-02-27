@@ -2,7 +2,7 @@
 
 import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 SUPPORTED_EXTENSIONS = {
     ".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp", ".gif",
@@ -23,7 +23,7 @@ def is_supported(filepath: Path) -> bool:
 
 
 def timestamp_now() -> str:
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def truncate(text: str, max_length: int = 200) -> str:

@@ -5,7 +5,6 @@ Supports PaddleOCR (default) and EasyOCR (optional).
 
 from pathlib import Path
 from abc import ABC, abstractmethod
-import fitz  # PyMuPDF
 from rich.console import Console
 from localarchive.config import OCRConfig
 
@@ -76,6 +75,10 @@ def get_ocr_engine(config: OCRConfig) -> BaseOCR:
 def pdf_to_images(pdf_path: Path, dpi: int = 200) -> list[Path]:
     """Convert each page of a PDF to a temporary PNG image."""
     import tempfile
+    try:
+        import fitz  # PyMuPDF
+    except ImportError as exc:
+        raise RuntimeError("PyMuPDF is required for PDF image conversion. Install `pymupdf`.") from exc
     doc = fitz.open(str(pdf_path))
     image_paths = []
     for page_num in range(len(doc)):
@@ -91,6 +94,10 @@ def pdf_to_images(pdf_path: Path, dpi: int = 200) -> list[Path]:
 
 def extract_text_from_pdf_native(pdf_path: Path) -> str:
     """Try to extract embedded text from PDF (no OCR needed)."""
+    try:
+        import fitz  # PyMuPDF
+    except ImportError as exc:
+        raise RuntimeError("PyMuPDF is required for native PDF extraction. Install `pymupdf`.") from exc
     doc = fitz.open(str(pdf_path))
     text = ""
     for page in doc:

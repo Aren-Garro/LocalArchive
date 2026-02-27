@@ -1,6 +1,7 @@
 """FastAPI web UI for LocalArchive. Lightweight HTMX-based interface."""
 
 from pathlib import Path
+from html import escape
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from localarchive.config import Config
@@ -23,11 +24,11 @@ def create_app(cfg: Config) -> FastAPI:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request, q: str = "", tag: str = ""):
+async def index(request: Request, q: str = "", tag: str = "", file_type: str = ""):
     results = []
     total = 0
     if q:
-        results = search_engine.search(q, tag=tag or None)
+        results = search_engine.search(q, tag=tag or None, file_type=file_type or None)
         total = search_engine.count(q)
     else:
         results = search_engine.recent(limit=20)
@@ -63,7 +64,9 @@ async def index(request: Request, q: str = "", tag: str = ""):
 <body>
     <h1>&#128230; LocalArchive</h1>
     <form class="search-box" action="/" method="get">
-        <input type="text" name="q" value="{q}" placeholder="Search your documents..." autofocus>
+        <input type="text" name="q" value="{escape(q)}" placeholder="Search your documents..." autofocus>
+        <input type="text" name="tag" value="{escape(tag)}" placeholder="tag">
+        <input type="text" name="file_type" value="{escape(file_type)}" placeholder="type (pdf/png)">
         <button type="submit">Search</button>
     </form>
     <p class="stats">{total} document{plural} {context}</p>
@@ -73,12 +76,59 @@ async def index(request: Request, q: str = "", tag: str = ""):
     return HTMLResponse(content=html)
 
 
+@app.get("/documents/{doc_id}", response_class=HTMLResponse)
+async def document_detail(doc_id: int):
+    doc = db.get_document_detail(doc_id)
+    if not doc:
+        return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
+
+    tags = ", ".join(escape(t) for t in doc.get("tags", [])) or "None"
+    fields_rows = "".join(
+        f"<tr><td>{escape(str(f.get('field_type', '')))}</td>"
+        f"<td>{escape(str(f.get('value', '')))}</td></tr>"
+        for f in doc.get("fields", [])
+    ) or "<tr><td colspan='2'>No extracted fields</td></tr>"
+    preview = escape((doc.get("ocr_text") or "")[:5000]).replace("\n", "<br>")
+    return HTMLResponse(
+        content=f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{escape(doc.get("filename", "Document"))} - LocalArchive</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 2rem; background: #fafafa; color: #1a1a1a; }}
+        a {{ color: #1d4ed8; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 1rem; }}
+        th, td {{ border: 1px solid #ddd; padding: 0.5rem; text-align: left; }}
+        .preview {{ margin-top: 1rem; background: #fff; border: 1px solid #e5e7eb; padding: 1rem; border-radius: 8px; }}
+    </style>
+</head>
+<body>
+    <p><a href="/">Back to search</a></p>
+    <h1>{escape(doc.get("filename", "Untitled"))}</h1>
+    <p><strong>ID:</strong> {doc["id"]}</p>
+    <p><strong>Type:</strong> {escape(str(doc.get("file_type", "?")))}</p>
+    <p><strong>Status:</strong> {escape(str(doc.get("status", "?")))}</p>
+    <p><strong>Tags:</strong> {tags}</p>
+    <h2>Extracted Fields</h2>
+    <table>
+        <thead><tr><th>Type</th><th>Value</th></tr></thead>
+        <tbody>{fields_rows}</tbody>
+    </table>
+    <h2>OCR Preview</h2>
+    <div class="preview">{preview}</div>
+</body>
+</html>"""
+    )
+
+
 def _render_card(doc: dict) -> str:
-    preview = (doc.get("ocr_text") or "")[:300]
+    preview = escape((doc.get("ocr_text") or "")[:300])
     preview_html = f'<div class="preview">{preview}</div>' if preview else ""
     return f"""
     <div class="doc-card">
-        <h3>{doc.get("filename", "Untitled")}</h3>
-        <p class="meta">ID: {doc["id"]} &middot; {doc.get("file_type", "?")} &middot; {doc.get("ingested_at", "")}</p>
+        <h3><a href="/documents/{doc['id']}">{escape(doc.get("filename", "Untitled"))}</a></h3>
+        <p class="meta">ID: {doc["id"]} &middot; {escape(str(doc.get("file_type", "?")))} &middot; {escape(str(doc.get("ingested_at", "")))}</p>
         {preview_html}
     </div>"""

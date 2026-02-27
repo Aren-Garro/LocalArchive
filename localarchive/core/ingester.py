@@ -5,6 +5,7 @@ Deduplicates by file hash, copies originals to archive storage.
 """
 
 import shutil
+import time
 from pathlib import Path
 from rich.console import Console
 from localarchive.config import Config
@@ -65,3 +66,32 @@ class Ingester:
             doc_ids.extend(self._ingest_file(filepath))
         console.print(f"[green]Ingested {len(doc_ids)} new documents.[/green]")
         return doc_ids
+
+
+def watch_directory(
+    ingester: Ingester,
+    path: Path,
+    interval_seconds: int = 5,
+    run_once: bool = False,
+) -> int:
+    """
+    Poll directory for supported files and ingest any new files.
+    Returns number of newly ingested documents across all cycles.
+    """
+    watch_path = Path(path).resolve()
+    if not watch_path.exists() or not watch_path.is_dir():
+        console.print(f"[red]Watch path not found or not a directory:[/red] {watch_path}")
+        return 0
+
+    total_ingested = 0
+    console.print(f"[bold]Watching[/bold] {watch_path} every {interval_seconds}s (Ctrl+C to stop)")
+    try:
+        while True:
+            ingested = ingester.ingest_path(watch_path)
+            total_ingested += len(ingested)
+            if run_once:
+                break
+            time.sleep(max(1, interval_seconds))
+    except KeyboardInterrupt:
+        console.print("\n[dim]Watcher stopped.[/dim]")
+    return total_ingested

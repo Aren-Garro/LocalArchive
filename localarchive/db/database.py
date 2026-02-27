@@ -50,6 +50,14 @@ class Database:
         row = self.conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         return dict(row) if row else None
 
+    def get_document_detail(self, doc_id: int) -> dict | None:
+        doc = self.get_document(doc_id)
+        if not doc:
+            return None
+        doc["tags"] = self.get_tags(doc_id)
+        doc["fields"] = self.get_fields(doc_id)
+        return doc
+
     def list_documents(self, status: str | None = None, limit: int = 100) -> list[dict]:
         if status:
             rows = self.conn.execute(

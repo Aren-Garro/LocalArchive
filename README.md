@@ -66,11 +66,26 @@ python -m localarchive.cli init
 ### Basic Usage
 
 ```bash
+# Initialize database and config
+python -m localarchive.cli init
+
 # Ingest a single file
 python -m localarchive.cli ingest invoice.pdf
 
 # Ingest an entire folder
 python -m localarchive.cli ingest ./documents/
+
+# Watch a folder for new files (continuous)
+python -m localarchive.cli watch ./documents/
+
+# Watch once and exit (single scan cycle)
+python -m localarchive.cli watch ./documents/ --once
+
+# Process pending files (OCR + field extraction)
+python -m localarchive.cli process
+
+# Choose extractor strategy
+python -m localarchive.cli process --extractor hybrid
 
 # Search your archive
 python -m localarchive.cli search "dentist 2024"
@@ -83,6 +98,9 @@ python -m localarchive.cli tag DOC_ID "medical" "2024"
 
 # Launch web UI (optional)
 python -m localarchive.cli serve
+
+# Document detail page
+# http://127.0.0.1:8877/documents/<DOC_ID>
 ```
 
 ## Core Principles
@@ -122,23 +140,27 @@ confidence_threshold = 0.6
 [extraction]
 use_local_llm = false          # Enable Ollama-based extraction
 ollama_model = "mistral"
+strategy = "regex"             # regex | spacy | ollama | hybrid
 
 [ui]
 host = "127.0.0.1"
 port = 8877
+
+[watch]
+interval_seconds = 5
 ```
 
 ## Roadmap
 
 - [x] Project architecture & scaffolding
-- [ ] CLI with init, ingest, search, export, tag commands
-- [ ] SQLite + FTS5 database layer
-- [ ] PDF / image ingestion pipeline
-- [ ] OCR integration (PaddleOCR)
-- [ ] Structured field extraction (dates, amounts, names)
-- [ ] Web UI with search & document viewer
-- [ ] Folder watcher (auto-ingest new files)
-- [ ] Ollama integration for smart extraction
+- [x] CLI with init, ingest, search, export, tag, process, watch, serve commands
+- [x] SQLite + FTS5 database layer
+- [x] PDF / image ingestion pipeline
+- [x] OCR integration (PaddleOCR / EasyOCR abstraction)
+- [x] Structured field extraction (regex + optional spaCy/Ollama strategies)
+- [x] Web UI with search and document detail viewer
+- [x] Folder watcher (auto-ingest new files)
+- [x] Ollama integration for smart extraction (optional/local)
 - [ ] CRDT-based sync for multi-device (future)
 
 ## License

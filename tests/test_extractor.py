@@ -28,3 +28,10 @@ def test_extract_phones():
     fields = extract_fields(text)
     phones = [f for f in fields if f.field_type == "phone"]
     assert len(phones) >= 1
+
+
+def test_extract_hybrid_includes_regex():
+    text = "Invoice total $12.50 on 01/15/2025"
+    fields = extract_fields(text, mode="hybrid")
+    assert any(f.field_type == "amount" for f in fields)
+    assert any(f.field_type == "date" for f in fields)
