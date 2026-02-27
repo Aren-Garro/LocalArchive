@@ -90,3 +90,52 @@ def test_watch_once(monkeypatch):
     docs = db.list_documents(limit=10)
     db.close()
     assert len(docs) == 1
+
+
+def test_reprocess_flow(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-reprocess")
+    archive_dir = tmp_path / "archive"
+    db_path = tmp_path / "archive.db"
+    config = Config(archive_dir=archive_dir, db_path=db_path)
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(db_path)
+    db.initialize()
+    doc_id = db.insert_document(
+        filename="broken.pdf",
+        filepath="/tmp/broken.pdf",
+        file_hash="broken-hash",
+        file_type="pdf",
+        file_size=100,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="error",
+        error_message="ocr failed",
+    )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["reprocess", "--status", "error", "--dry-run"])
+    assert result.exit_code == 0
+    assert "Dry run" in result.output
+
+    result = runner.invoke(main, ["reprocess", "--status", "error"])
+    assert result.exit_code == 0
+    assert "Marked 1 document" in result.output
+
+    db = Database(db_path)
+    db.initialize()
+    doc = db.get_document(doc_id)
+    db.close()
+    assert doc["status"] == "pending_ocr"
+    assert doc["error_message"] == ""
+
+
+def test_doctor_failure_exit_code(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-doctor")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    monkeypatch.setattr("importlib.util.find_spec", lambda _name: None)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 3

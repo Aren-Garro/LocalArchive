@@ -1,13 +1,14 @@
 """
 LocalArchive CLI - main entry point.
-Commands: init, ingest, search, export, tag, process, watch, serve
+Commands: init, ingest, search, export, tag, process, reprocess, watch, doctor, serve
 """
 
 import click
+import importlib.util
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
-from localarchive.config import Config
+from localarchive.config import Config, DEFAULT_CONFIG_PATH
 from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
 from localarchive.core.ingester import Ingester, watch_directory
@@ -15,8 +16,32 @@ from localarchive.core.ingester import Ingester, watch_directory
 console = Console()
 
 
+class CLIError(click.ClickException):
+    def __init__(self, message: str, exit_code: int):
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
+def _set_console(quiet: bool, no_color: bool) -> None:
+    global console
+    console = Console(quiet=quiet, no_color=no_color)
+
+
+def _runtime_ctx() -> dict:
+    ctx = click.get_current_context(silent=True)
+    if not ctx or not ctx.obj:
+        return {}
+    return ctx.obj
+
+
 def get_config() -> Config:
-    return Config.load()
+    opts = _runtime_ctx()
+    config_path = opts.get("config_path")
+    try:
+        cfg = Config.load(config_path or DEFAULT_CONFIG_PATH)
+    except ValueError as exc:
+        raise CLIError(f"Invalid configuration: {exc}", exit_code=2) from exc
+    return cfg
 
 
 def get_db(config: Config) -> Database:
@@ -26,18 +51,43 @@ def get_db(config: Config) -> Database:
 
 
 @click.group()
+@click.option("--config", "config_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--verbose", is_flag=True, help="Verbose diagnostics.")
+@click.option("--quiet", is_flag=True, help="Suppress non-error output.")
+@click.option("--no-color", is_flag=True, help="Disable colored output.")
 @click.version_option(version="0.1.0")
-def main():
+@click.pass_context
+def main(ctx: click.Context, config_path: Path | None, verbose: bool, quiet: bool, no_color: bool):
     """LocalArchive - Your private, offline document library."""
-    pass
+    ctx.obj = {
+        "config_path": config_path,
+        "verbose": verbose,
+        "quiet": quiet,
+        "no_color": no_color,
+    }
+    _set_console(quiet=quiet, no_color=no_color)
+
+
+def _validate_limit(limit: int) -> None:
+    if limit < 1:
+        raise CLIError("Limit must be >= 1.", exit_code=2)
 
 
 @main.command()
-def init():
+@click.option("--rewrite-config", is_flag=True, help="Overwrite config file with defaults.")
+def init(rewrite_config: bool):
     """Initialize LocalArchive database and directories."""
+    opts = _runtime_ctx()
+    config_path = opts.get("config_path") or DEFAULT_CONFIG_PATH
     config = get_config()
     config.ensure_dirs()
-    config.save()
+    if not config_path.exists() or rewrite_config:
+        try:
+            config.save(config_path=config_path)
+        except PermissionError:
+            console.print(f"[yellow]Could not write config file:[/yellow] {config_path}")
+    else:
+        config = get_config()
     db = get_db(config)
     db.close()
     console.print("[green]LocalArchive initialized.[/green]")
@@ -62,14 +112,20 @@ def ingest(path: str):
 @main.command()
 @click.argument("query")
 @click.option("--tag", default=None, help="Filter by tag")
-@click.option("--type", "file_type", default=None, help="Filter by file type")
-@click.option("--limit", default=20, help="Max results")
-def search(query: str, tag: str, file_type: str, limit: int):
+@click.option("--file-type", default=None, help="Filter by file type")
+@click.option("--type", "legacy_file_type", default=None, hidden=True)
+@click.option("--limit", default=None, type=int, help="Max results")
+def search(query: str, tag: str, file_type: str | None, legacy_file_type: str | None, limit: int | None):
     """Search documents in the archive."""
     config = get_config()
+    max_results = limit if limit is not None else config.ui.default_limit
+    _validate_limit(max_results)
+    if legacy_file_type and not file_type:
+        file_type = legacy_file_type
+        console.print("[yellow]`--type` is deprecated. Use `--file-type`.[/yellow]")
     db = get_db(config)
     engine = SearchEngine(db)
-    results = engine.search(query, limit=limit, tag=tag, file_type=file_type)
+    results = engine.search(query, limit=max_results, tag=tag, file_type=file_type)
     if not results:
         console.print("[yellow]No results found.[/yellow]")
         db.close()
@@ -131,7 +187,7 @@ def tag(doc_id: int, tags: tuple[str]):
 
 
 @main.command()
-@click.option("--limit", default=50, help="Max documents to process")
+@click.option("--limit", default=None, type=int, help="Max documents to process")
 @click.option(
     "--extractor",
     "extractor_mode",
@@ -139,14 +195,16 @@ def tag(doc_id: int, tags: tuple[str]):
     default=None,
     help="Extraction strategy (defaults to config.extraction.strategy).",
 )
-def process(limit: int, extractor_mode: str | None):
+def process(limit: int | None, extractor_mode: str | None):
     """Run OCR and field extraction on pending documents."""
     from localarchive.core.ocr_engine import get_ocr_engine, pdf_to_images, extract_text_from_pdf_native
     from localarchive.core.extractor import extract_fields
     config = get_config()
+    max_docs = limit if limit is not None else config.processing.default_limit
+    _validate_limit(max_docs)
     db = get_db(config)
     ocr = get_ocr_engine(config.ocr)
-    pending = db.list_documents(status="pending_ocr", limit=limit)
+    pending = db.list_documents(status="pending_ocr", limit=max_docs)
     if not pending:
         console.print("[dim]No documents pending OCR.[/dim]")
         db.close()
@@ -159,14 +217,15 @@ def process(limit: int, extractor_mode: str | None):
             full_text = ""
             if doc["file_type"] == "pdf":
                 native_text = extract_text_from_pdf_native(filepath)
-                if len(native_text.strip()) > 50:
+                if len(native_text.strip()) > config.processing.pdf_native_text_min_chars:
                     full_text = native_text
                 else:
                     images = pdf_to_images(filepath)
                     for img_path in images:
                         entries = ocr.extract_text(img_path)
                         full_text += " ".join(e["text"] for e in entries) + "\n"
-                        img_path.unlink(missing_ok=True)
+                        if config.runtime.cleanup_temp_files:
+                            img_path.unlink(missing_ok=True)
             else:
                 entries = ocr.extract_text(filepath)
                 full_text = " ".join(e["text"] for e in entries)
@@ -176,15 +235,40 @@ def process(limit: int, extractor_mode: str | None):
                 {"field_type": f.field_type, "value": f.value, "raw_match": f.raw_match, "start": f.start}
                 for f in fields
             ]
-            db.update_document(doc["id"], ocr_text=full_text, status="processed")
-            if field_dicts:
-                db.insert_fields(doc["id"], field_dicts)
+            db.update_processed_document(doc["id"], ocr_text=full_text, fields=field_dicts)
             console.print(f"[green]done[/green] ({len(fields)} fields)")
         except Exception as e:
-            db.update_document(doc["id"], status="error")
+            db.update_document(doc["id"], status="error", error_message=str(e))
             console.print(f"[red]error: {e}[/red]")
+            if config.runtime.fail_fast:
+                break
     db.close()
     console.print("\n[green]Processing complete.[/green]")
+
+
+@main.command()
+@click.option("--status", type=click.Choice(["error", "processed"]), default="error")
+@click.option("--since", default=None, help="Only include docs since ISO timestamp.")
+@click.option("--limit", default=50, help="Max documents to include.")
+@click.option("--dry-run", is_flag=True, help="Preview IDs only, no status changes.")
+def reprocess(status: str, since: str | None, limit: int, dry_run: bool):
+    """Move selected documents back to pending OCR."""
+    _validate_limit(limit)
+    config = get_config()
+    db = get_db(config)
+    docs = db.list_documents_for_reprocess(status=status, since=since, limit=limit)
+    if not docs:
+        console.print("[dim]No matching documents to reprocess.[/dim]")
+        db.close()
+        return
+    doc_ids = [d["id"] for d in docs]
+    if dry_run:
+        console.print(f"[yellow]Dry run:[/yellow] would reprocess {len(doc_ids)} document(s): {doc_ids}")
+        db.close()
+        return
+    updated = db.mark_for_reprocess(doc_ids)
+    db.close()
+    console.print(f"[green]Marked {updated} document(s) for reprocessing.[/green]")
 
 
 @main.command()
@@ -206,11 +290,50 @@ def watch(path: Path, interval: int | None, once: bool):
 
 
 @main.command()
+def doctor():
+    """Check local dependencies and writable paths."""
+    config = get_config()
+    checks = []
+
+    def _check(name: str, ok: bool, detail: str):
+        checks.append((name, "PASS" if ok else "FAIL", detail))
+
+    _check("config_path", True, str((_runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH)))
+    _check("archive_dir_writable", config.archive_dir.exists() or config.archive_dir.parent.exists(), str(config.archive_dir))
+    _check("db_parent_writable", config.db_path.parent.exists(), str(config.db_path.parent))
+    _check("tmp_dir_writable", config.runtime.tmp_dir.exists() or config.runtime.tmp_dir.parent.exists(), str(config.runtime.tmp_dir))
+    _check("fastapi_installed", importlib.util.find_spec("fastapi") is not None, "optional for `serve`")
+    _check("uvicorn_installed", importlib.util.find_spec("uvicorn") is not None, "optional for `serve`")
+    _check("pymupdf_installed", importlib.util.find_spec("fitz") is not None, "needed for PDF processing")
+    if config.ocr.engine == "easyocr":
+        _check("easyocr_installed", importlib.util.find_spec("easyocr") is not None, "required by OCR config")
+    else:
+        _check("paddleocr_installed", importlib.util.find_spec("paddleocr") is not None, "required by OCR config")
+
+    table = Table(title="LocalArchive Doctor")
+    table.add_column("Check", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail")
+    has_fail = False
+    for name, status, detail in checks:
+        if status == "FAIL":
+            has_fail = True
+        style = "green" if status == "PASS" else "red"
+        table.add_row(name, f"[{style}]{status}[/{style}]", detail)
+    console.print(table)
+    if has_fail:
+        raise CLIError("Doctor found failing checks.", exit_code=3)
+
+
+@main.command()
 @click.option("--host", default=None, help="Host (default: 127.0.0.1)")
 @click.option("--port", default=None, type=int, help="Port (default: 8877)")
 def serve(host: str, port: int):
     """Launch the web UI."""
-    import uvicorn
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise CLIError("Missing dependency `uvicorn`. Install UI dependencies.", exit_code=3) from exc
     from localarchive.ui.app import create_app
     config = get_config()
     config.ensure_dirs()
@@ -223,4 +346,8 @@ def serve(host: str, port: int):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except CLIError as e:
+        console.print(f"[red]{e.message}[/red]")
+        raise click.exceptions.Exit(e.exit_code)

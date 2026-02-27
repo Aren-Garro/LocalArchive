@@ -84,6 +84,9 @@ python -m localarchive.cli watch ./documents/ --once
 # Process pending files (OCR + field extraction)
 python -m localarchive.cli process
 
+# Requeue failed documents for OCR retry
+python -m localarchive.cli reprocess --status error
+
 # Choose extractor strategy
 python -m localarchive.cli process --extractor hybrid
 
@@ -98,6 +101,9 @@ python -m localarchive.cli tag DOC_ID "medical" "2024"
 
 # Launch web UI (optional)
 python -m localarchive.cli serve
+
+# Environment and dependency checks
+python -m localarchive.cli doctor
 
 # Document detail page
 # http://127.0.0.1:8877/documents/<DOC_ID>
@@ -145,15 +151,27 @@ strategy = "regex"             # regex | spacy | ollama | hybrid
 [ui]
 host = "127.0.0.1"
 port = 8877
+default_limit = 20
+show_preview_chars = 300
 
 [watch]
 interval_seconds = 5
+
+[runtime]
+max_workers = 1
+tmp_dir = "~/.localarchive/tmp"
+fail_fast = false
+cleanup_temp_files = true
+
+[processing]
+pdf_native_text_min_chars = 50
+default_limit = 50
 ```
 
 ## Roadmap
 
 - [x] Project architecture & scaffolding
-- [x] CLI with init, ingest, search, export, tag, process, watch, serve commands
+- [x] CLI with init, ingest, search, export, tag, process, reprocess, watch, doctor, serve commands
 - [x] SQLite + FTS5 database layer
 - [x] PDF / image ingestion pipeline
 - [x] OCR integration (PaddleOCR / EasyOCR abstraction)

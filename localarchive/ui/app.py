@@ -24,14 +24,32 @@ def create_app(cfg: Config) -> FastAPI:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request, q: str = "", tag: str = "", file_type: str = ""):
+async def index(
+    request: Request,
+    q: str = "",
+    tag: str = "",
+    file_type: str = "",
+    status: str = "",
+    limit: int | None = None,
+    offset: int = 0,
+):
     results = []
     total = 0
+    page_limit = limit or config.ui.default_limit
+    page_limit = max(1, min(page_limit, 200))
+    offset = max(0, offset)
     if q:
-        results = search_engine.search(q, tag=tag or None, file_type=file_type or None)
-        total = search_engine.count(q)
+        results = search_engine.search(
+            q,
+            limit=page_limit,
+            offset=offset,
+            tag=tag or None,
+            file_type=file_type or None,
+            status=status or None,
+        )
+        total = search_engine.count(q, status=status or None)
     else:
-        results = search_engine.recent(limit=20)
+        results = search_engine.recent(limit=page_limit, offset=offset, status=status or None)
         total = len(results)
 
     cards = "".join(_render_card(doc) for doc in results)
@@ -67,10 +85,16 @@ async def index(request: Request, q: str = "", tag: str = "", file_type: str = "
         <input type="text" name="q" value="{escape(q)}" placeholder="Search your documents..." autofocus>
         <input type="text" name="tag" value="{escape(tag)}" placeholder="tag">
         <input type="text" name="file_type" value="{escape(file_type)}" placeholder="type (pdf/png)">
+        <input type="text" name="status" value="{escape(status)}" placeholder="status">
+        <input type="number" name="limit" value="{page_limit}" min="1" max="200">
         <button type="submit">Search</button>
     </form>
     <p class="stats">{total} document{plural} {context}</p>
     {cards}
+    <div style="margin-top:1rem;display:flex;gap:0.75rem;">
+      <a href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={max(0, offset-page_limit)}">Prev</a>
+      <a href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={offset+page_limit}">Next</a>
+    </div>
 </body>
 </html>"""
     return HTMLResponse(content=html)
@@ -124,7 +148,7 @@ async def document_detail(doc_id: int):
 
 
 def _render_card(doc: dict) -> str:
-    preview = escape((doc.get("ocr_text") or "")[:300])
+    preview = escape((doc.get("ocr_text") or "")[: config.ui.show_preview_chars])
     preview_html = f'<div class="preview">{preview}</div>' if preview else ""
     return f"""
     <div class="doc-card">

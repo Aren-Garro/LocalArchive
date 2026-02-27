@@ -11,9 +11,12 @@ CREATE TABLE IF NOT EXISTS documents (
     file_type       TEXT NOT NULL,
     file_size       INTEGER NOT NULL,
     ingested_at     TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'pending_ocr',
     ocr_text        TEXT DEFAULT '',
-    page_count      INTEGER DEFAULT 0
+    page_count      INTEGER DEFAULT 0,
+    error_message   TEXT DEFAULT '',
+    last_processed_at TEXT DEFAULT ''
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
@@ -59,10 +62,16 @@ CREATE TABLE IF NOT EXISTS extracted_fields (
     position    INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_doc ON extracted_fields(document_id);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_type ON extracted_fields(field_type);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_extracted_fields_dedupe
+    ON extracted_fields(document_id, field_type, value, position);
 """
 
 
@@ -75,9 +84,12 @@ class Document:
     file_type: str = ""
     file_size: int = 0
     ingested_at: str = ""
+    updated_at: str = ""
     status: str = "pending_ocr"
     ocr_text: str = ""
     page_count: int = 0
+    error_message: str = ""
+    last_processed_at: str = ""
     tags: list[str] = field(default_factory=list)
 
 
