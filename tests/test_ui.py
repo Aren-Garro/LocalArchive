@@ -86,3 +86,42 @@ def test_ui_document_detail():
 
     res = client.get("/documents/99999")
     assert res.status_code == 404
+
+
+def test_ui_document_actions():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi.testclient")
+    from fastapi.testclient import TestClient
+    from localarchive.ui.app import create_app
+
+    tmp_path = _workspace_tmp_dir("localarchive-ui-actions")
+    db_path = tmp_path / "ui-actions.db"
+    config = Config(archive_dir=tmp_path / "archive", db_path=db_path)
+    db = Database(db_path)
+    db.initialize()
+    doc_id = _seed_db(db)
+    db.update_document(doc_id, status="error", error_message="failed")
+    db.close()
+
+    app = create_app(config)
+    client = TestClient(app)
+
+    res = client.post(f"/documents/{doc_id}/retry", follow_redirects=False)
+    assert res.status_code == 303
+
+    db = Database(db_path)
+    db.initialize()
+    doc = db.get_document(doc_id)
+    assert doc["status"] == "pending_ocr"
+    assert doc["error_message"] == ""
+    db.close()
+
+    res = client.post(f"/documents/{doc_id}/tags", data={"tags": "health, urgent"}, follow_redirects=False)
+    assert res.status_code == 303
+
+    db = Database(db_path)
+    db.initialize()
+    tags = db.get_tags(doc_id)
+    db.close()
+    assert "health" in tags
+    assert "urgent" in tags

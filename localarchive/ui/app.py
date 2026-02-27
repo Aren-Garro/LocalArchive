@@ -2,8 +2,8 @@
 
 from pathlib import Path
 from html import escape
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
 from localarchive.config import Config
 from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
@@ -135,6 +135,14 @@ async def document_detail(doc_id: int):
     <p><strong>Type:</strong> {escape(str(doc.get("file_type", "?")))}</p>
     <p><strong>Status:</strong> {escape(str(doc.get("status", "?")))}</p>
     <p><strong>Tags:</strong> {tags}</p>
+    <form action="/documents/{doc_id}/retry" method="post" style="margin-top:0.75rem;">
+        <button type="submit">Retry Processing</button>
+    </form>
+    <form action="/documents/{doc_id}/tags" method="post" style="margin-top:0.75rem;">
+        <label><strong>Update Tags:</strong></label><br>
+        <input type="text" name="tags" value="{escape(', '.join(doc.get('tags', [])))}" style="width:100%;max-width:480px;">
+        <button type="submit">Save Tags</button>
+    </form>
     <h2>Extracted Fields</h2>
     <table>
         <thead><tr><th>Type</th><th>Value</th></tr></thead>
@@ -145,6 +153,25 @@ async def document_detail(doc_id: int):
 </body>
 </html>"""
     )
+
+
+@app.post("/documents/{doc_id}/retry")
+async def retry_document(doc_id: int):
+    doc = db.get_document(doc_id)
+    if not doc:
+        return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
+    db.mark_for_reprocess([doc_id])
+    return RedirectResponse(url=f"/documents/{doc_id}", status_code=303)
+
+
+@app.post("/documents/{doc_id}/tags")
+async def update_document_tags(doc_id: int, tags: str = Form(default="")):
+    doc = db.get_document(doc_id)
+    if not doc:
+        return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
+    parsed = [tag.strip() for tag in tags.split(",")]
+    db.set_tags(doc_id, parsed)
+    return RedirectResponse(url=f"/documents/{doc_id}", status_code=303)
 
 
 def _render_card(doc: dict) -> str:

@@ -137,6 +137,18 @@ class Database:
         )
         self.conn.commit()
 
+    def set_tags(self, doc_id: int, tags: list[str]) -> None:
+        normalized = sorted({t.strip().lower() for t in tags if t and t.strip()})
+        self.conn.execute("DELETE FROM document_tags WHERE document_id = ?", (doc_id,))
+        for tag_name in normalized:
+            self.conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag_name,))
+            tag_row = self.conn.execute("SELECT id FROM tags WHERE name = ?", (tag_name,)).fetchone()
+            self.conn.execute(
+                "INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?, ?)",
+                (doc_id, tag_row["id"]),
+            )
+        self.conn.commit()
+
     def get_tags(self, doc_id: int) -> list[str]:
         rows = self.conn.execute(
             "SELECT t.name FROM tags t JOIN document_tags dt ON dt.tag_id = t.id WHERE dt.document_id = ? ORDER BY t.name",
