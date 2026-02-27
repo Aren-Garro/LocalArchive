@@ -1,0 +1,64 @@
+"""Tests for localarchive.db.database"""
+import tempfile
+from pathlib import Path
+from localarchive.db.database import Database
+
+
+def _get_test_db():
+    tmp = tempfile.mktemp(suffix=".db")
+    db = Database(Path(tmp))
+    db.initialize()
+    return db
+
+
+def test_insert_and_get_document():
+    db = _get_test_db()
+    doc_id = db.insert_document(
+        filename="test.pdf", filepath="/tmp/test.pdf", file_hash="abc123",
+        file_type="pdf", file_size=1024, ingested_at="2026-01-01T00:00:00Z", status="pending_ocr",
+    )
+    assert doc_id > 0
+    doc = db.get_document(doc_id)
+    assert doc is not None
+    assert doc["filename"] == "test.pdf"
+    assert doc["file_hash"] == "abc123"
+    db.close()
+
+
+def test_duplicate_hash():
+    db = _get_test_db()
+    db.insert_document(
+        filename="a.pdf", filepath="/tmp/a.pdf", file_hash="dup123",
+        file_type="pdf", file_size=100, ingested_at="2026-01-01T00:00:00Z", status="pending_ocr",
+    )
+    assert db.document_exists_by_hash("dup123") is True
+    assert db.document_exists_by_hash("nonexistent") is False
+    db.close()
+
+
+def test_tags():
+    db = _get_test_db()
+    doc_id = db.insert_document(
+        filename="tagged.pdf", filepath="/tmp/tagged.pdf", file_hash="tag123",
+        file_type="pdf", file_size=200, ingested_at="2026-01-01T00:00:00Z", status="processed",
+    )
+    db.add_tag(doc_id, "medical")
+    db.add_tag(doc_id, "2024")
+    tags = db.get_tags(doc_id)
+    assert "medical" in tags
+    assert "2024" in tags
+    db.close()
+
+
+def test_search_fts():
+    db = _get_test_db()
+    db.insert_document(
+        filename="invoice.pdf", filepath="/tmp/invoice.pdf", file_hash="fts123",
+        file_type="pdf", file_size=500, ingested_at="2026-01-01T00:00:00Z",
+        status="processed", ocr_text="Payment received from Acme Corp for consulting services",
+    )
+    rows = db.conn.execute(
+        "SELECT * FROM documents_fts WHERE documents_fts MATCH ?", ("Acme",)
+    ).fetchall()
+    assert len(rows) > 0
+    db.close()
