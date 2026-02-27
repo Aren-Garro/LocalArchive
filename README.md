@@ -72,6 +72,9 @@ python -m localarchive.cli init
 # Ingest a single file
 python -m localarchive.cli ingest invoice.pdf
 
+# Ingest with research profile (auto research tagging)
+python -m localarchive.cli ingest paper.pdf --profile research
+
 # Ingest an entire folder
 python -m localarchive.cli ingest ./documents/
 
@@ -93,6 +96,9 @@ python -m localarchive.cli process --extractor hybrid
 # Search your archive
 python -m localarchive.cli search "dentist 2024"
 
+# Hybrid search flags (semantic routing if enabled in config)
+python -m localarchive.cli search "graph neural nets" --semantic --bm25-weight 0.6 --vector-weight 0.4
+
 # Export results to CSV
 python -m localarchive.cli export --query "receipts" --format csv --output results.csv
 
@@ -104,6 +110,21 @@ python -m localarchive.cli serve
 
 # Environment and dependency checks
 python -m localarchive.cli doctor
+
+# Build and inspect smart collections
+python -m localarchive.cli collections auto-build
+python -m localarchive.cli collections list
+
+# Timeline view by extracted entity
+python -m localarchive.cli timeline --entity topic
+
+# Integrity audit and optional repair
+python -m localarchive.cli audit
+python -m localarchive.cli audit --repair
+
+# Local backup / restore
+python -m localarchive.cli backup create --path localarchive-backup.zip
+python -m localarchive.cli backup restore --path localarchive-backup.zip
 
 # Document detail page
 # http://127.0.0.1:8877/documents/<DOC_ID>
@@ -166,12 +187,36 @@ cleanup_temp_files = true
 [processing]
 pdf_native_text_min_chars = 50
 default_limit = 50
+
+[research]
+citation_styles = ["apa"]
+default_collections = ["Research PDFs", "Needs Review"]
+entity_priority = ["author", "topic", "journal"]
+
+[autopilot]
+enabled = true
+classification_model = "rules"
+confidence_threshold = 0.65
+auto_tag = true
+
+[search]
+enable_semantic = false
+embedding_model = "local-minilm"
+reranker = "none"
+snippet_chars = 300
+facet_defaults = ["file_type", "status", "tag"]
+
+[reliability]
+backup_interval = 86400
+integrity_check_on_startup = false
+max_retries = 2
+checkpoint_batch_size = 25
 ```
 
 ## Roadmap
 
 - [x] Project architecture & scaffolding
-- [x] CLI with init, ingest, search, export, tag, process, reprocess, watch, doctor, serve commands
+- [x] CLI with init, ingest, search, export, tag, process, reprocess, watch, doctor, collections, timeline, audit, backup, serve commands
 - [x] SQLite + FTS5 database layer
 - [x] PDF / image ingestion pipeline
 - [x] OCR integration (PaddleOCR / EasyOCR abstraction)

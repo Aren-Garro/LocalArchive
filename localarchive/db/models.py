@@ -66,10 +66,62 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS collections (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT DEFAULT '',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS collection_rules (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    rule_type     TEXT NOT NULL,
+    rule_value    TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS document_collections (
+    document_id    INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    collection_id  INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    score          REAL NOT NULL DEFAULT 1.0,
+    assigned_at    TEXT NOT NULL,
+    PRIMARY KEY (document_id, collection_id)
+);
+
+CREATE TABLE IF NOT EXISTS processing_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at    TEXT NOT NULL,
+    ended_at      TEXT DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'running',
+    engine        TEXT DEFAULT '',
+    extractor     TEXT DEFAULT '',
+    processed     INTEGER NOT NULL DEFAULT 0,
+    errors        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS processing_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id        INTEGER NOT NULL REFERENCES processing_runs(id) ON DELETE CASCADE,
+    document_id   INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+    event_type    TEXT NOT NULL,
+    message       TEXT DEFAULT '',
+    created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS document_embeddings (
+    document_id    INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    model          TEXT NOT NULL,
+    vector_blob    BLOB NOT NULL,
+    created_at     TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_doc ON extracted_fields(document_id);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_type ON extracted_fields(field_type);
+CREATE INDEX IF NOT EXISTS idx_document_collections_collection ON document_collections(collection_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_extracted_fields_dedupe
     ON extracted_fields(document_id, field_type, value, position);
 """

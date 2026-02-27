@@ -1,10 +1,12 @@
 """
 LocalArchive CLI - main entry point.
-Commands: init, ingest, search, export, tag, process, reprocess, watch, doctor, serve
+Commands: init, ingest, search, export, tag, process, reprocess, watch, doctor, collections, timeline, audit, backup, serve
 """
 
 import click
 import importlib.util
+import zipfile
+import shutil
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
@@ -97,13 +99,17 @@ def init(rewrite_config: bool):
 
 @main.command()
 @click.argument("path")
-def ingest(path: str):
+@click.option("--profile", type=click.Choice(["default", "research"]), default="default")
+def ingest(path: str, profile: str):
     """Ingest a file or folder into the archive."""
     config = get_config()
     config.ensure_dirs()
     db = get_db(config)
     ingester = Ingester(config, db)
     doc_ids = ingester.ingest_path(Path(path))
+    if profile == "research" and config.autopilot.auto_tag:
+        for doc_id in doc_ids:
+            db.add_tag(doc_id, "research")
     if doc_ids:
         console.print("\nRun [cyan]localarchive process[/cyan] to OCR these documents.")
     db.close()
@@ -115,7 +121,19 @@ def ingest(path: str):
 @click.option("--file-type", default=None, help="Filter by file type")
 @click.option("--type", "legacy_file_type", default=None, hidden=True)
 @click.option("--limit", default=None, type=int, help="Max results")
-def search(query: str, tag: str, file_type: str | None, legacy_file_type: str | None, limit: int | None):
+@click.option("--semantic", is_flag=True, help="Enable semantic scoring when configured.")
+@click.option("--bm25-weight", default=0.7, type=float, help="Hybrid BM25 weight.")
+@click.option("--vector-weight", default=0.3, type=float, help="Hybrid vector weight.")
+def search(
+    query: str,
+    tag: str,
+    file_type: str | None,
+    legacy_file_type: str | None,
+    limit: int | None,
+    semantic: bool,
+    bm25_weight: float,
+    vector_weight: float,
+):
     """Search documents in the archive."""
     config = get_config()
     max_results = limit if limit is not None else config.ui.default_limit
@@ -126,6 +144,12 @@ def search(query: str, tag: str, file_type: str | None, legacy_file_type: str | 
     db = get_db(config)
     engine = SearchEngine(db)
     results = engine.search(query, limit=max_results, tag=tag, file_type=file_type)
+    if semantic and not config.search.enable_semantic:
+        console.print("[yellow]Semantic search is disabled in config.search.enable_semantic; using BM25 only.[/yellow]")
+    if semantic:
+        console.print(
+            f"[dim]Hybrid search request: bm25_weight={bm25_weight:.2f}, vector_weight={vector_weight:.2f}[/dim]"
+        )
     if not results:
         console.print("[yellow]No results found.[/yellow]")
         db.close()
@@ -209,6 +233,10 @@ def process(limit: int | None, extractor_mode: str | None):
         console.print("[dim]No documents pending OCR.[/dim]")
         db.close()
         return
+    mode = extractor_mode or config.extraction.strategy
+    run_id = db.start_processing_run(engine=config.ocr.engine, extractor=mode)
+    processed_count = 0
+    error_count = 0
     console.print(f"Processing [bold]{len(pending)}[/bold] documents...\n")
     for doc in pending:
         filepath = Path(doc["filepath"])
@@ -229,19 +257,24 @@ def process(limit: int | None, extractor_mode: str | None):
             else:
                 entries = ocr.extract_text(filepath)
                 full_text = " ".join(e["text"] for e in entries)
-            mode = extractor_mode or config.extraction.strategy
             fields = extract_fields(full_text, mode=mode, config=config.extraction)
             field_dicts = [
                 {"field_type": f.field_type, "value": f.value, "raw_match": f.raw_match, "start": f.start}
                 for f in fields
             ]
             db.update_processed_document(doc["id"], ocr_text=full_text, fields=field_dicts)
+            db.add_processing_event(run_id, "processed", message=f"{len(fields)} fields", document_id=doc["id"])
+            processed_count += 1
             console.print(f"[green]done[/green] ({len(fields)} fields)")
         except Exception as e:
             db.update_document(doc["id"], status="error", error_message=str(e))
+            db.add_processing_event(run_id, "error", message=str(e), document_id=doc["id"])
+            error_count += 1
             console.print(f"[red]error: {e}[/red]")
             if config.runtime.fail_fast:
                 break
+    final_status = "completed" if error_count == 0 else "completed_with_errors"
+    db.finish_processing_run(run_id, status=final_status, processed=processed_count, errors=error_count)
     db.close()
     console.print("\n[green]Processing complete.[/green]")
 
@@ -323,6 +356,138 @@ def doctor():
     console.print(table)
     if has_fail:
         raise CLIError("Doctor found failing checks.", exit_code=3)
+
+
+@main.group()
+def collections():
+    """Manage smart collections."""
+    pass
+
+
+@collections.command("auto-build")
+@click.option("--rules", type=click.Choice(["default", "custom"]), default="default")
+def collections_auto_build(rules: str):
+    """Build collection assignments using configured rules."""
+    if rules != "default":
+        raise CLIError("Only default rules are currently implemented.", exit_code=2)
+    config = get_config()
+    db = get_db(config)
+    summary = db.auto_build_default_collections()
+    db.close()
+    console.print(
+        f"[green]Built collections:[/green] {summary['collections']} with {sum(summary['assignments'].values())} assignments"
+    )
+
+
+@collections.command("list")
+def collections_list():
+    """List collections and document counts."""
+    config = get_config()
+    db = get_db(config)
+    rows = db.list_collections()
+    table = Table(title="Collections")
+    table.add_column("ID", style="cyan", width=6)
+    table.add_column("Name", style="bold")
+    table.add_column("Documents", width=10)
+    for row in rows:
+        table.add_row(str(row["id"]), row["name"], str(row["doc_count"]))
+    console.print(table)
+    db.close()
+
+
+@main.command()
+@click.option("--entity", type=click.Choice(["author", "topic", "journal"]), default="topic")
+@click.option("--limit", default=100, type=int)
+def timeline(entity: str, limit: int):
+    """Show a chronological timeline by extracted entity."""
+    _validate_limit(limit)
+    config = get_config()
+    db = get_db(config)
+    rows = db.timeline_rows(entity=entity, limit=limit)
+    table = Table(title=f"Timeline ({entity})")
+    table.add_column("When", width=28)
+    table.add_column("ID", style="cyan", width=6)
+    table.add_column("Entity", width=24)
+    table.add_column("Filename", style="bold")
+    for row in rows:
+        when = row.get("last_processed_at") or row.get("ingested_at") or ""
+        table.add_row(when, str(row["id"]), str(row.get("entity_value") or "-"), row["filename"])
+    console.print(table)
+    db.close()
+
+
+@main.command()
+@click.option("--repair", is_flag=True, help="Attempt automatic repairs where possible.")
+def audit(repair: bool):
+    """Verify archive integrity and index consistency."""
+    config = get_config()
+    db = get_db(config)
+    report = db.audit_verify(repair=repair)
+    db.close()
+    console.print(f"Checked {report['checked']} documents.")
+    if not report["issues"]:
+        console.print("[green]Audit passed. No issues found.[/green]")
+        return
+    table = Table(title="Audit Issues")
+    table.add_column("Doc ID", width=8)
+    table.add_column("Issue")
+    table.add_column("Path/Detail")
+    for issue in report["issues"]:
+        table.add_row(str(issue.get("id") or "-"), issue["issue"], issue["path"])
+    console.print(table)
+    raise CLIError("Audit found issues.", exit_code=4)
+
+
+@main.group()
+def backup():
+    """Create or restore local backups."""
+    pass
+
+
+@backup.command("create")
+@click.option("--path", "backup_path", type=click.Path(dir_okay=False, path_type=Path), required=True)
+def backup_create(backup_path: Path):
+    """Create a backup archive including DB and config."""
+    config = get_config()
+    config.ensure_dirs()
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
+    with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if config.db_path.exists():
+            zf.write(config.db_path, arcname="archive.db")
+        if cfg_path.exists():
+            zf.write(cfg_path, arcname="config.toml")
+        if config.archive_dir.exists():
+            for p in config.archive_dir.rglob("*"):
+                if p.is_file():
+                    zf.write(p, arcname=str(Path("archive_data") / p.relative_to(config.archive_dir)))
+    console.print(f"[green]Backup created:[/green] {backup_path}")
+
+
+@backup.command("restore")
+@click.option("--path", "backup_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+def backup_restore(backup_path: Path):
+    """Restore DB and archive data from a backup archive."""
+    config = get_config()
+    config.ensure_dirs()
+    cfg_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
+    with zipfile.ZipFile(backup_path, "r") as zf:
+        members = set(zf.namelist())
+        if "archive.db" in members:
+            zf.extract("archive.db", path=backup_path.parent)
+            shutil.move(str(backup_path.parent / "archive.db"), str(config.db_path))
+        if "config.toml" in members:
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            zf.extract("config.toml", path=backup_path.parent)
+            shutil.move(str(backup_path.parent / "config.toml"), str(cfg_path))
+        for name in members:
+            if name.startswith("archive_data/"):
+                rel = Path(name).relative_to("archive_data")
+                dest = config.archive_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(name, "r") as src, open(dest, "wb") as out:
+                    out.write(src.read())
+    console.print(f"[green]Backup restored from:[/green] {backup_path}")
 
 
 @main.command()

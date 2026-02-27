@@ -51,6 +51,40 @@ class ProcessingConfig:
 
 
 @dataclass
+class ResearchConfig:
+    citation_styles: list[str] = field(default_factory=lambda: ["apa"])
+    default_collections: list[str] = field(
+        default_factory=lambda: ["Research PDFs", "Needs Review"]
+    )
+    entity_priority: list[str] = field(default_factory=lambda: ["author", "topic", "journal"])
+
+
+@dataclass
+class AutopilotConfig:
+    enabled: bool = True
+    classification_model: str = "rules"
+    confidence_threshold: float = 0.65
+    auto_tag: bool = True
+
+
+@dataclass
+class SearchConfig:
+    enable_semantic: bool = False
+    embedding_model: str = "local-minilm"
+    reranker: str = "none"
+    snippet_chars: int = 300
+    facet_defaults: list[str] = field(default_factory=lambda: ["file_type", "status", "tag"])
+
+
+@dataclass
+class ReliabilityConfig:
+    backup_interval: int = 86400
+    integrity_check_on_startup: bool = False
+    max_retries: int = 2
+    checkpoint_batch_size: int = 25
+
+
+@dataclass
 class UIConfig:
     host: str = "127.0.0.1"
     port: int = 8877
@@ -68,6 +102,10 @@ class Config:
     watch: WatchConfig = field(default_factory=WatchConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
+    research: ResearchConfig = field(default_factory=ResearchConfig)
+    autopilot: AutopilotConfig = field(default_factory=AutopilotConfig)
+    search: SearchConfig = field(default_factory=SearchConfig)
+    reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)
 
     @classmethod
     def load(cls, config_path: Path = DEFAULT_CONFIG_PATH) -> "Config":
@@ -123,6 +161,52 @@ class Config:
                     ),
                     default_limit=int(processing_data.get("default_limit", config.processing.default_limit)),
                 )
+            research_data = data.get("research", {})
+            if research_data:
+                config.research = ResearchConfig(
+                    citation_styles=list(research_data.get("citation_styles", config.research.citation_styles)),
+                    default_collections=list(
+                        research_data.get("default_collections", config.research.default_collections)
+                    ),
+                    entity_priority=list(research_data.get("entity_priority", config.research.entity_priority)),
+                )
+            autopilot_data = data.get("autopilot", {})
+            if autopilot_data:
+                config.autopilot = AutopilotConfig(
+                    enabled=bool(autopilot_data.get("enabled", config.autopilot.enabled)),
+                    classification_model=autopilot_data.get(
+                        "classification_model", config.autopilot.classification_model
+                    ),
+                    confidence_threshold=float(
+                        autopilot_data.get("confidence_threshold", config.autopilot.confidence_threshold)
+                    ),
+                    auto_tag=bool(autopilot_data.get("auto_tag", config.autopilot.auto_tag)),
+                )
+            search_data = data.get("search", {})
+            if search_data:
+                config.search = SearchConfig(
+                    enable_semantic=bool(search_data.get("enable_semantic", config.search.enable_semantic)),
+                    embedding_model=search_data.get("embedding_model", config.search.embedding_model),
+                    reranker=search_data.get("reranker", config.search.reranker),
+                    snippet_chars=int(search_data.get("snippet_chars", config.search.snippet_chars)),
+                    facet_defaults=list(search_data.get("facet_defaults", config.search.facet_defaults)),
+                )
+            reliability_data = data.get("reliability", {})
+            if reliability_data:
+                config.reliability = ReliabilityConfig(
+                    backup_interval=int(reliability_data.get("backup_interval", config.reliability.backup_interval)),
+                    integrity_check_on_startup=bool(
+                        reliability_data.get(
+                            "integrity_check_on_startup", config.reliability.integrity_check_on_startup
+                        )
+                    ),
+                    max_retries=int(reliability_data.get("max_retries", config.reliability.max_retries)),
+                    checkpoint_batch_size=int(
+                        reliability_data.get(
+                            "checkpoint_batch_size", config.reliability.checkpoint_batch_size
+                        )
+                    ),
+                )
         config.validate()
         return config
 
@@ -155,6 +239,16 @@ class Config:
             raise ValueError("ui.default_limit must be >= 1")
         if self.ui.show_preview_chars < 20:
             raise ValueError("ui.show_preview_chars must be >= 20")
+        if not 0 <= self.autopilot.confidence_threshold <= 1:
+            raise ValueError("autopilot.confidence_threshold must be between 0 and 1")
+        if self.search.snippet_chars < 50:
+            raise ValueError("search.snippet_chars must be >= 50")
+        if self.reliability.backup_interval < 60:
+            raise ValueError("reliability.backup_interval must be >= 60")
+        if self.reliability.max_retries < 0:
+            raise ValueError("reliability.max_retries must be >= 0")
+        if self.reliability.checkpoint_batch_size < 1:
+            raise ValueError("reliability.checkpoint_batch_size must be >= 1")
 
     def save(self, config_path: Path = DEFAULT_CONFIG_PATH) -> None:
         if toml is None:
@@ -184,6 +278,30 @@ class Config:
             "processing": {
                 "pdf_native_text_min_chars": self.processing.pdf_native_text_min_chars,
                 "default_limit": self.processing.default_limit,
+            },
+            "research": {
+                "citation_styles": self.research.citation_styles,
+                "default_collections": self.research.default_collections,
+                "entity_priority": self.research.entity_priority,
+            },
+            "autopilot": {
+                "enabled": self.autopilot.enabled,
+                "classification_model": self.autopilot.classification_model,
+                "confidence_threshold": self.autopilot.confidence_threshold,
+                "auto_tag": self.autopilot.auto_tag,
+            },
+            "search": {
+                "enable_semantic": self.search.enable_semantic,
+                "embedding_model": self.search.embedding_model,
+                "reranker": self.search.reranker,
+                "snippet_chars": self.search.snippet_chars,
+                "facet_defaults": self.search.facet_defaults,
+            },
+            "reliability": {
+                "backup_interval": self.reliability.backup_interval,
+                "integrity_check_on_startup": self.reliability.integrity_check_on_startup,
+                "max_retries": self.reliability.max_retries,
+                "checkpoint_batch_size": self.reliability.checkpoint_batch_size,
             },
         }
         with open(config_path, "w") as f:

@@ -139,3 +139,73 @@ def test_doctor_failure_exit_code(monkeypatch):
     runner = CliRunner()
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 3
+
+
+def test_ingest_research_profile(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-profile")
+    archive_dir = tmp_path / "archive"
+    db_path = tmp_path / "archive.db"
+    config = Config(archive_dir=archive_dir, db_path=db_path)
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    runner = CliRunner()
+    source_file = tmp_path / "paper.pdf"
+    source_file.write_bytes(b"%PDF-1.4 fake")
+
+    result = runner.invoke(main, ["init"])
+    assert result.exit_code == 0
+    result = runner.invoke(main, ["ingest", str(source_file), "--profile", "research"])
+    assert result.exit_code == 0
+
+    db = Database(db_path)
+    db.initialize()
+    tags = db.get_tags(1)
+    db.close()
+    assert "research" in tags
+
+
+def test_collections_timeline_backup_and_audit(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-ops")
+    archive_dir = tmp_path / "archive"
+    db_path = tmp_path / "archive.db"
+    config = Config(archive_dir=archive_dir, db_path=db_path)
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(db_path)
+    db.initialize()
+    doc_id = db.insert_document(
+        filename="timeline.pdf",
+        filepath=str(tmp_path / "timeline.pdf"),
+        file_hash="timelinehash",
+        file_type="pdf",
+        file_size=100,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="Entity Org in 2024",
+    )
+    (tmp_path / "timeline.pdf").write_bytes(b"not-real-pdf")
+    db.insert_fields(
+        doc_id,
+        [{"field_type": "entity_org", "value": "ACME Lab", "raw_match": "ACME Lab", "start": 0}],
+    )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["collections", "auto-build"])
+    assert result.exit_code == 0
+
+    result = runner.invoke(main, ["collections", "list"])
+    assert result.exit_code == 0
+    assert "Research PDFs" in result.output
+
+    result = runner.invoke(main, ["timeline", "--entity", "topic"])
+    assert result.exit_code == 0
+    assert "ACME Lab" in result.output
+
+    backup_path = tmp_path / "backup.zip"
+    result = runner.invoke(main, ["backup", "create", "--path", str(backup_path)])
+    assert result.exit_code == 0
+    assert backup_path.exists()
+
+    result = runner.invoke(main, ["audit"])
+    assert result.exit_code in (0, 4)

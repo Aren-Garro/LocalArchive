@@ -84,3 +84,29 @@ def test_search_by_tag_and_field():
     assert any(d["id"] == doc_id for d in by_tag)
     assert any(d["id"] == doc_id for d in by_field)
     db.close()
+
+
+def test_collections_and_audit():
+    db = _get_test_db()
+    doc_id = db.insert_document(
+        filename="paper.pdf",
+        filepath="/tmp/paper.pdf",
+        file_hash="paperhash",
+        file_type="pdf",
+        file_size=111,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="error",
+    )
+    db.insert_fields(
+        doc_id,
+        [{"field_type": "year", "value": "2024", "raw_match": "2024", "start": 0}],
+    )
+    summary = db.auto_build_default_collections()
+    cols = db.list_collections()
+    assert summary["collections"] >= 2
+    assert any(c["name"] == "Research PDFs" for c in cols)
+    assert any(c["name"] == "Needs Review" for c in cols)
+
+    audit = db.audit_verify()
+    assert isinstance(audit["issues"], list)
+    db.close()

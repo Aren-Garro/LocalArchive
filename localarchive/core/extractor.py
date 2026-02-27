@@ -34,6 +34,9 @@ AMOUNT_PATTERNS = [
 
 EMAIL_PATTERN = r"\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b"
 PHONE_PATTERN = r"\b(\+?\d?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})\b"
+DOI_PATTERN = r"\b(10\.\d{4,9}/[-._;()/:A-Z0-9]+)\b"
+ARXIV_PATTERN = r"\b(arXiv:\s*\d{4}\.\d{4,5}(?:v\d+)?)\b"
+YEAR_PATTERN = r"\b((?:19|20)\d{2})\b"
 
 
 def _extract_fields_regex(text: str) -> list[ExtractedField]:
@@ -53,6 +56,15 @@ def _extract_fields_regex(text: str) -> list[ExtractedField]:
 
     for match in re.finditer(PHONE_PATTERN, text):
         fields.append(ExtractedField("phone", match.group(1), match.group(0), match.start(), match.end()))
+
+    for match in re.finditer(DOI_PATTERN, text, re.IGNORECASE):
+        fields.append(ExtractedField("doi", match.group(1), match.group(0), match.start(), match.end()))
+
+    for match in re.finditer(ARXIV_PATTERN, text, re.IGNORECASE):
+        fields.append(ExtractedField("arxiv", match.group(1), match.group(0), match.start(), match.end()))
+
+    for match in re.finditer(YEAR_PATTERN, text):
+        fields.append(ExtractedField("year", match.group(1), match.group(0), match.start(), match.end()))
 
     # Deduplicate
     seen = set()

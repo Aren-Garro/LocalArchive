@@ -2,10 +2,11 @@
 
 import sqlite3
 from pathlib import Path
+from collections import defaultdict
 from localarchive.db.models import SCHEMA_SQL
-from localarchive.utils import timestamp_now
+from localarchive.utils import timestamp_now, file_hash
 
-LATEST_SCHEMA_VERSION = 2
+LATEST_SCHEMA_VERSION = 3
 
 
 class Database:
@@ -57,6 +58,60 @@ class Database:
                 "ON extracted_fields(document_id, field_type, value, position)"
             )
             self._set_schema_version(2)
+
+        if version < 3:
+            self.conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS collections (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name        TEXT NOT NULL UNIQUE,
+                    description TEXT DEFAULT '',
+                    created_at  TEXT NOT NULL,
+                    updated_at  TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS collection_rules (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+                    rule_type     TEXT NOT NULL,
+                    rule_value    TEXT NOT NULL,
+                    created_at    TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS document_collections (
+                    document_id    INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    collection_id  INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+                    score          REAL NOT NULL DEFAULT 1.0,
+                    assigned_at    TEXT NOT NULL,
+                    PRIMARY KEY (document_id, collection_id)
+                );
+                CREATE TABLE IF NOT EXISTS processing_runs (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    started_at    TEXT NOT NULL,
+                    ended_at      TEXT DEFAULT '',
+                    status        TEXT NOT NULL DEFAULT 'running',
+                    engine        TEXT DEFAULT '',
+                    extractor     TEXT DEFAULT '',
+                    processed     INTEGER NOT NULL DEFAULT 0,
+                    errors        INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS processing_events (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id        INTEGER NOT NULL REFERENCES processing_runs(id) ON DELETE CASCADE,
+                    document_id   INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+                    event_type    TEXT NOT NULL,
+                    message       TEXT DEFAULT '',
+                    created_at    TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS document_embeddings (
+                    document_id    INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                    model          TEXT NOT NULL,
+                    vector_blob    BLOB NOT NULL,
+                    created_at     TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_document_collections_collection
+                    ON document_collections(collection_id);
+                """
+            )
+            self._set_schema_version(3)
 
     def close(self) -> None:
         if self._conn:
@@ -206,3 +261,149 @@ class Database:
             "SELECT * FROM extracted_fields WHERE document_id = ?", (doc_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def start_processing_run(self, engine: str, extractor: str) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO processing_runs(started_at, status, engine, extractor) VALUES (?, 'running', ?, ?)",
+            (timestamp_now(), engine, extractor),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def add_processing_event(self, run_id: int, event_type: str, message: str = "", document_id: int | None = None) -> None:
+        self.conn.execute(
+            "INSERT INTO processing_events(run_id, document_id, event_type, message, created_at) VALUES (?, ?, ?, ?, ?)",
+            (run_id, document_id, event_type, message, timestamp_now()),
+        )
+        self.conn.commit()
+
+    def finish_processing_run(self, run_id: int, status: str, processed: int, errors: int) -> None:
+        self.conn.execute(
+            "UPDATE processing_runs SET ended_at = ?, status = ?, processed = ?, errors = ? WHERE id = ?",
+            (timestamp_now(), status, processed, errors, run_id),
+        )
+        self.conn.commit()
+
+    def upsert_collection(self, name: str, description: str = "") -> int:
+        now = timestamp_now()
+        self.conn.execute(
+            "INSERT INTO collections(name, description, created_at, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET description = excluded.description, updated_at = excluded.updated_at",
+            (name, description, now, now),
+        )
+        row = self.conn.execute("SELECT id FROM collections WHERE name = ?", (name,)).fetchone()
+        self.conn.commit()
+        return int(row["id"])
+
+    def set_collection_rule(self, collection_id: int, rule_type: str, rule_value: str) -> None:
+        self.conn.execute("DELETE FROM collection_rules WHERE collection_id = ? AND rule_type = ?", (collection_id, rule_type))
+        self.conn.execute(
+            "INSERT INTO collection_rules(collection_id, rule_type, rule_value, created_at) VALUES (?, ?, ?, ?)",
+            (collection_id, rule_type, rule_value, timestamp_now()),
+        )
+        self.conn.commit()
+
+    def clear_collection_assignments(self, collection_id: int | None = None) -> None:
+        if collection_id is None:
+            self.conn.execute("DELETE FROM document_collections")
+        else:
+            self.conn.execute("DELETE FROM document_collections WHERE collection_id = ?", (collection_id,))
+        self.conn.commit()
+
+    def assign_document_to_collection(self, doc_id: int, collection_id: int, score: float = 1.0) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO document_collections(document_id, collection_id, score, assigned_at) VALUES (?, ?, ?, ?)",
+            (doc_id, collection_id, score, timestamp_now()),
+        )
+
+    def list_collections(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT c.*, COUNT(dc.document_id) as doc_count "
+            "FROM collections c LEFT JOIN document_collections dc ON dc.collection_id = c.id "
+            "GROUP BY c.id ORDER BY c.name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def auto_build_default_collections(self) -> dict:
+        docs = self.list_documents(limit=100000)
+        research_id = self.upsert_collection("Research PDFs", "All ingested PDF research documents")
+        review_id = self.upsert_collection("Needs Review", "Documents requiring manual review")
+        by_year_prefix = "By Year:"
+        self.clear_collection_assignments()
+        year_collections: dict[str, int] = {}
+        assignments = defaultdict(int)
+
+        for doc in docs:
+            if doc.get("file_type") == "pdf":
+                self.assign_document_to_collection(doc["id"], research_id, score=0.9)
+                assignments["Research PDFs"] += 1
+            if doc.get("status") == "error":
+                self.assign_document_to_collection(doc["id"], review_id, score=1.0)
+                assignments["Needs Review"] += 1
+            fields = self.get_fields(doc["id"])
+            year = None
+            for field in fields:
+                value = str(field.get("value", ""))
+                match = None
+                for token in value.replace("/", "-").split("-"):
+                    if len(token) == 4 and token.isdigit() and token.startswith(("19", "20")):
+                        match = token
+                        break
+                if match:
+                    year = match
+                    break
+            if year:
+                name = f"{by_year_prefix} {year}"
+                if name not in year_collections:
+                    year_collections[name] = self.upsert_collection(name, f"Documents associated with year {year}")
+                self.assign_document_to_collection(doc["id"], year_collections[name], score=0.8)
+                assignments[name] += 1
+
+        self.conn.commit()
+        return {"collections": len(self.list_collections()), "assignments": dict(assignments)}
+
+    def timeline_rows(self, entity: str = "topic", limit: int = 200) -> list[dict]:
+        entity_field = {
+            "author": "entity_person",
+            "topic": "entity_org",
+            "journal": "entity_org",
+        }.get(entity, "entity_org")
+        rows = self.conn.execute(
+            """
+            SELECT d.id, d.filename, d.ingested_at, d.last_processed_at,
+                   ef.value as entity_value
+            FROM documents d
+            LEFT JOIN extracted_fields ef ON ef.document_id = d.id AND ef.field_type = ?
+            ORDER BY COALESCE(d.last_processed_at, d.ingested_at) DESC
+            LIMIT ?
+            """,
+            (entity_field, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def audit_verify(self, repair: bool = False) -> dict:
+        issues = []
+        checked = 0
+        docs = self.list_documents(limit=100000)
+        for doc in docs:
+            checked += 1
+            fpath = Path(doc["filepath"])
+            if not fpath.exists():
+                issues.append({"id": doc["id"], "issue": "missing_file", "path": str(fpath)})
+                continue
+            try:
+                actual_hash = file_hash(fpath)
+                if actual_hash != doc["file_hash"]:
+                    issues.append({"id": doc["id"], "issue": "hash_mismatch", "path": str(fpath)})
+            except Exception:
+                issues.append({"id": doc["id"], "issue": "hash_error", "path": str(fpath)})
+
+        docs_count = self.conn.execute("SELECT COUNT(*) as c FROM documents").fetchone()["c"]
+        fts_count = self.conn.execute("SELECT COUNT(*) as c FROM documents_fts").fetchone()["c"]
+        if int(docs_count) != int(fts_count):
+            issues.append({"id": None, "issue": "fts_mismatch", "path": f"{docs_count} vs {fts_count}"})
+            if repair:
+                self.conn.execute("INSERT INTO documents_fts(documents_fts) VALUES ('rebuild')")
+                self.conn.commit()
+
+        return {"checked": checked, "issues": issues}
