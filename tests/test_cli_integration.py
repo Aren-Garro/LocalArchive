@@ -1034,3 +1034,74 @@ def test_process_ocr_languages_validation(monkeypatch):
     bad = runner.invoke(main, ["process", "--ocr-languages", "en,*", "--dry-run"])
     assert bad.exit_code == 2
     assert "Invalid OCR language code" in bad.output
+
+
+def test_process_extract_tables_persists_results(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-process-tables")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    fake_ocr_module = types.SimpleNamespace(
+        get_ocr_engine=lambda _cfg: _FakeOCR(),
+        pdf_to_images=lambda _path, tmp_dir=None: [],
+        extract_text_from_pdf_native=lambda _path: "",
+    )
+    monkeypatch.setitem(sys.modules, "localarchive.core.ocr_engine", fake_ocr_module)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "table.png"
+    source.write_bytes(b"x")
+    db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="process-tables-1",
+        file_type="png",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="pending_ocr",
+    )
+    db.close()
+
+    runner = CliRunner()
+    run = runner.invoke(main, ["process", "--json", "--workers", "1", "--extract-tables"])
+    assert run.exit_code == 0
+    assert '"extract_tables": true' in run.output
+
+    db = Database(config.db_path)
+    db.initialize()
+    tables = db.get_tables(1)
+    db.close()
+    assert isinstance(tables, list)
+
+
+def test_export_include_tables_json(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-export-tables")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "export.png"
+    source.write_bytes(b"x")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="export-tables-1",
+        file_type="png",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="Header1 | Header2\nA | B",
+    )
+    db.set_tables(doc_id, [{"headers": ["Header1", "Header2"], "rows": [["A", "B"]]}])
+    db.close()
+
+    runner = CliRunner()
+    out_path = tmp_path / "export.json"
+    result = runner.invoke(
+        main,
+        ["export", "--format", "json", "--output", str(out_path), "--include-tables"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload
+    assert "tables" in payload[0]

@@ -86,6 +86,7 @@ python -m localarchive.cli watch ./documents/ --once
 
 # Process pending files (OCR + field extraction)
 python -m localarchive.cli process
+python -m localarchive.cli process --extract-tables
 
 # Process in parallel with batched DB commits
 python -m localarchive.cli process --workers 4 --commit-batch-size 20
@@ -118,6 +119,7 @@ python -m localarchive.cli search "receipt" --explain-ranking
 
 # Export results to CSV
 python -m localarchive.cli export --query "receipts" --format csv --output results.csv
+python -m localarchive.cli export --format json --output results.json --include-tables
 
 # Tag a document
 python -m localarchive.cli tag DOC_ID "medical" "2024"

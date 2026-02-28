@@ -454,7 +454,8 @@ def search(
 @click.option("--query", default=None, help="Search query to filter export")
 @click.option("--format", "fmt", type=click.Choice(["csv", "json", "markdown"]), default="csv")
 @click.option("--output", "-o", required=True, help="Output file path")
-def export(query: str, fmt: str, output: str):
+@click.option("--include-tables", is_flag=True, help="Include extracted tables in exported rows.")
+def export(query: str, fmt: str, output: str, include_tables: bool):
     """Export documents to CSV, JSON, or Markdown."""
     from localarchive.core.exporter import export_csv, export_json, export_markdown
 
@@ -465,6 +466,13 @@ def export(query: str, fmt: str, output: str):
         documents = engine.search(query, limit=10000)
     else:
         documents = db.list_documents(limit=10000)
+    if include_tables:
+        enriched = []
+        for doc in documents:
+            row = dict(doc)
+            row["tables"] = db.get_tables(int(doc["id"]))
+            enriched.append(row)
+        documents = enriched
     output_path = Path(output)
     if fmt == "csv":
         export_csv(documents, output_path)
@@ -517,6 +525,7 @@ def tag(doc_id: int, tags: tuple[str]):
     default=None,
     help="Extraction strategy (defaults to config.extraction.strategy).",
 )
+@click.option("--extract-tables", is_flag=True, help="Extract simple table structures from document text.")
 @click.option("--dry-run", is_flag=True, help="Preview pending IDs and exit without processing.")
 @click.option("--max-errors", type=int, default=None, help="Abort run after this many errors.")
 @click.option("--resume", is_flag=True, help="Resume from latest processing checkpoint.")
@@ -535,6 +544,7 @@ def process(
     commit_batch_size: int | None,
     checkpoint_every: int | None,
     extractor_mode: str | None,
+    extract_tables: bool,
     dry_run: bool,
     max_errors: int | None,
     resume: bool,
@@ -549,6 +559,7 @@ def process(
         get_ocr_engine,
         pdf_to_images,
     )
+    from localarchive.core.table_extractor import extract_tables_from_text
 
     config = get_config()
     max_docs = limit if limit is not None else config.processing.default_limit
@@ -602,6 +613,7 @@ def process(
                     "errors": 0,
                     "aborted_reason": "",
                     "ocr_languages": resolved_ocr_languages,
+                    "extract_tables": bool(extract_tables),
                     "checkpoint_doc_id": after_doc_id,
                     "total_candidates": 0,
                 }
@@ -620,6 +632,7 @@ def process(
                     "count": len(doc_ids),
                     "doc_ids": doc_ids,
                     "ocr_languages": resolved_ocr_languages,
+                    "extract_tables": bool(extract_tables),
                     "resumed_from_run": int(resume_run.get("id")) if resume_run else None,
                     "start_after_doc_id": after_doc_id,
                 }
@@ -637,6 +650,12 @@ def process(
         document_id=None,
         event_type="config",
         message=f"ocr_languages={','.join(resolved_ocr_languages)}",
+    )
+    db.add_processing_event(
+        run_id,
+        document_id=None,
+        event_type="config",
+        message=f"extract_tables={str(bool(extract_tables)).lower()}",
     )
     processed_count = 0
     error_count = 0
@@ -694,11 +713,13 @@ def process(
                 }
                 for f in fields
             ]
+            table_dicts = extract_tables_from_text(full_text) if extract_tables else []
             return {
                 "doc_id": doc["id"],
                 "filename": doc["filename"],
                 "full_text": full_text,
                 "fields": field_dicts,
+                "tables": table_dicts,
             }
         finally:
             if config.runtime.cleanup_temp_files:
@@ -713,6 +734,8 @@ def process(
             return
         if success_buffer:
             db.update_processed_documents_batch(success_buffer)
+            for item in success_buffer:
+                db.set_tables(int(item["doc_id"]), item.get("tables") or [])
             success_buffer.clear()
         if error_buffer:
             db.record_processing_errors_batch(
@@ -760,12 +783,13 @@ def process(
                     "run_id": run_id,
                     "document_id": doc_id,
                     "event_type": "processed",
-                    "message": f"{len(result['fields'])} fields",
+                    "message": f"{len(result['fields'])} fields, {len(result.get('tables') or [])} tables",
                 }
             )
             processed_count += 1
             console.print(
-                f"  -> {filename}... [green]done[/green] ({len(result['fields'])} fields)"
+                f"  -> {filename}... [green]done[/green] "
+                f"({len(result['fields'])} fields, {len(result.get('tables') or [])} tables)"
             )
         completed_count += 1
         if completed_count % checkpoint_size == 0:
@@ -835,6 +859,7 @@ def process(
                 "errors": error_count,
                 "aborted_reason": aborted_reason,
                 "ocr_languages": resolved_ocr_languages,
+                "extract_tables": bool(extract_tables),
                 "checkpoint_doc_id": int(run_meta.get("checkpoint_doc_id", 0) or 0),
                 "total_candidates": len(pending),
                 "resumed_from_run": int(resume_run.get("id")) if resume_run else None,

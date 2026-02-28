@@ -1,5 +1,6 @@
 """SQLite database manager for LocalArchive."""
 
+import json
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 from localarchive.db.models import SCHEMA_SQL
 from localarchive.utils import file_hash, timestamp_now
 
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 6
 
 
 class Database:
@@ -156,6 +157,24 @@ class Database:
             )
             self._set_schema_version(5)
 
+        if version < 6:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS extracted_tables (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    table_index   INTEGER NOT NULL DEFAULT 0,
+                    schema_json   TEXT NOT NULL DEFAULT '[]',
+                    rows_json     TEXT NOT NULL DEFAULT '[]',
+                    created_at    TEXT NOT NULL
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc ON extracted_tables(document_id)"
+            )
+            self._set_schema_version(6)
+
     def close(self) -> None:
         if self._conn:
             self._conn.close()
@@ -196,6 +215,7 @@ class Database:
             return None
         doc["tags"] = self.get_tags(doc_id)
         doc["fields"] = self.get_fields(doc_id)
+        doc["tables"] = self.get_tables(doc_id)
         return doc
 
     def list_documents(
@@ -412,6 +432,43 @@ class Database:
             "SELECT * FROM extracted_fields WHERE document_id = ?", (doc_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def set_tables(self, doc_id: int, tables: list[dict]) -> None:
+        self.conn.execute("DELETE FROM extracted_tables WHERE document_id = ?", (doc_id,))
+        for idx, table in enumerate(tables):
+            headers = table.get("headers", [])
+            rows = table.get("rows", [])
+            self.conn.execute(
+                "INSERT INTO extracted_tables(document_id, table_index, schema_json, rows_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    doc_id,
+                    idx,
+                    json.dumps(headers, ensure_ascii=False),
+                    json.dumps(rows, ensure_ascii=False),
+                    timestamp_now(),
+                ),
+            )
+        self.conn.commit()
+
+    def get_tables(self, doc_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT table_index, schema_json, rows_json FROM extracted_tables WHERE document_id = ? "
+            "ORDER BY table_index ASC",
+            (doc_id,),
+        ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            try:
+                headers = json.loads(row["schema_json"] or "[]")
+            except Exception:
+                headers = []
+            try:
+                table_rows = json.loads(row["rows_json"] or "[]")
+            except Exception:
+                table_rows = []
+            out.append({"table_index": int(row["table_index"]), "headers": headers, "rows": table_rows})
+        return out
 
     def start_processing_run(self, engine: str, extractor: str) -> int:
         cur = self.conn.execute(

@@ -93,6 +93,7 @@ def test_ui_document_detail():
     db = Database(db_path)
     db.initialize()
     doc_id = _seed_db(db)
+    db.set_tables(doc_id, [{"headers": ["ColA", "ColB"], "rows": [["1", "2"]]}])
     db.close()
 
     app = create_app(config)
@@ -101,6 +102,8 @@ def test_ui_document_detail():
     res = client.get(f"/documents/{doc_id}")
     assert res.status_code == 200
     assert "Extracted Fields" in res.text
+    assert "Extracted Tables" in res.text
+    assert "ColA" in res.text
     assert "$42.00" in res.text
     assert "chip processed" in res.text
 

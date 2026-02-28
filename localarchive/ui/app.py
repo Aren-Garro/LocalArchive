@@ -327,6 +327,23 @@ async def document_detail(request: Request, doc_id: int):
     )
     preview = escape((doc.get("ocr_text") or "")[:5000]).replace("\n", "<br>")
     status = escape(str(doc.get("status", "?")))
+    tables = doc.get("tables") or []
+    tables_html_parts: list[str] = []
+    for table in tables:
+        headers = table.get("headers") or []
+        rows = table.get("rows") or []
+        header_cells = "".join(f"<th>{escape(str(h))}</th>" for h in headers)
+        body_rows = "".join(
+            "<tr>" + "".join(f"<td>{escape(str(cell))}</td>" for cell in row) + "</tr>"
+            for row in rows
+        )
+        tables_html_parts.append(
+            "<div class='panel' style='margin-top:0.75rem;'>"
+            f"<p><strong>Table {int(table.get('table_index', 0)) + 1}</strong></p>"
+            f"<table><thead><tr>{header_cells}</tr></thead><tbody>{body_rows}</tbody></table>"
+            "</div>"
+        )
+    tables_html = "".join(tables_html_parts)
     csrf_token = _ensure_csrf_token(request)
     response = HTMLResponse(
         content=f"""<!DOCTYPE html>
@@ -363,6 +380,8 @@ async def document_detail(request: Request, doc_id: int):
     </table>
     <h2>OCR Preview</h2>
     <div class="panel">{preview}</div>
+    <h2>Extracted Tables</h2>
+    {tables_html or "<p class='hint'>No tables extracted.</p>"}
 </body>
 </html>"""
     )

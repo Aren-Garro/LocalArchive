@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS extracted_fields (
     position    INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS extracted_tables (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    table_index   INTEGER NOT NULL DEFAULT 0,
+    schema_json   TEXT NOT NULL DEFAULT '[]',
+    rows_json     TEXT NOT NULL DEFAULT '[]',
+    created_at    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
@@ -134,6 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_doc ON extracted_fields(document_id);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_type ON extracted_fields(field_type);
+CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc ON extracted_tables(document_id);
 CREATE INDEX IF NOT EXISTS idx_document_collections_collection ON document_collections(collection_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_extracted_fields_dedupe
     ON extracted_fields(document_id, field_type, value, position);
