@@ -63,6 +63,16 @@ pip install -r requirements.txt
 python -m localarchive.cli init
 ```
 
+### Docker (optional)
+
+```bash
+# Build and run via Docker Compose
+docker compose up --build
+
+# UI will be available at:
+# http://127.0.0.1:8877
+```
+
 ### Basic Usage
 
 ```bash

@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  localarchive:
+    build: .
+    container_name: localarchive
+    ports:
+      - "8877:8877"
+    environment:
+      - LOCALARCHIVE_CONFIG=/data/config.toml
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./docker-data:/data
+    command: ["python", "-m", "localarchive.cli", "serve", "--host", "0.0.0.0", "--port", "8877"]
+

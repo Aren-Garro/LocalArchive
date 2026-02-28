@@ -1,0 +1,14 @@
+.git
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.test_tmp
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.db
+docker-data
+venv
+.venv
+
