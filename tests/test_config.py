@@ -28,3 +28,10 @@ def test_config_validation_rejects_invalid_processing_limits():
     cfg.processing.max_errors_per_run = 0
     with pytest.raises(ValueError):
         cfg.validate()
+
+
+def test_config_validation_rejects_invalid_ui_language():
+    cfg = Config()
+    cfg.ui.language = "english"
+    with pytest.raises(ValueError):
+        cfg.validate()

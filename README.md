@@ -1,15 +1,15 @@
-# 📦 LocalArchive
+﻿# ðŸ“¦ LocalArchive
 
 **Turn your chaotic pile of PDFs, scans, and documents into a private, offline, searchable library.**
 
-LocalArchive is a **local-first document intelligence pipeline** — it runs entirely on your machine, requires no accounts, no subscriptions, and no cloud uploads. Your data stays yours.
+LocalArchive is a **local-first document intelligence pipeline** â€” it runs entirely on your machine, requires no accounts, no subscriptions, and no cloud uploads. Your data stays yours.
 
 ## What It Does
 
-1. **Scans & reads documents** — Drop in PDFs, images, scans. OCR extracts the text automatically.
-2. **Pulls out key fields** — Dates, names, amounts, invoice numbers — structured extraction without cloud APIs.
-3. **Makes everything searchable** — Full-text search across your entire document library, offline.
-4. **Exports clean data** — Output to CSV, JSON, or Markdown for use anywhere.
+1. **Scans & reads documents** â€” Drop in PDFs, images, scans. OCR extracts the text automatically.
+2. **Pulls out key fields** â€” Dates, names, amounts, invoice numbers â€” structured extraction without cloud APIs.
+3. **Makes everything searchable** â€” Full-text search across your entire document library, offline.
+4. **Exports clean data** â€” Output to CSV, JSON, or Markdown for use anywhere.
 
 ## Who Is This For?
 
@@ -22,20 +22,20 @@ LocalArchive is a **local-first document intelligence pipeline** — it runs ent
 
 ```
 localarchive/
-├── cli.py              # Command-line interface (main entry point)
-├── core/
-│   ├── ingester.py     # File ingestion — watches folders, imports docs
-│   ├── ocr_engine.py   # OCR processing (PaddleOCR / EasyOCR)
-│   ├── extractor.py    # Structured field extraction (dates, amounts, names)
-│   └── exporter.py     # Export to CSV, JSON, Markdown
-├── db/
-│   ├── database.py     # SQLite database manager
-│   ├── models.py       # Data models (Document, Tag, Field)
-│   └── search.py       # Full-text search engine (FTS5)
-├── ui/
-│   └── app.py          # Web UI (FastAPI + HTMX, optional)
-├── config.py           # Configuration & settings
-└── utils.py            # Shared utilities (hashing, file type detection)
+â”œâ”€â”€ cli.py              # Command-line interface (main entry point)
+â”œâ”€â”€ core/
+â”‚   â”œâ”€â”€ ingester.py     # File ingestion â€” watches folders, imports docs
+â”‚   â”œâ”€â”€ ocr_engine.py   # OCR processing (PaddleOCR / EasyOCR)
+â”‚   â”œâ”€â”€ extractor.py    # Structured field extraction (dates, amounts, names)
+â”‚   â””â”€â”€ exporter.py     # Export to CSV, JSON, Markdown
+â”œâ”€â”€ db/
+â”‚   â”œâ”€â”€ database.py     # SQLite database manager
+â”‚   â”œâ”€â”€ models.py       # Data models (Document, Tag, Field)
+â”‚   â””â”€â”€ search.py       # Full-text search engine (FTS5)
+â”œâ”€â”€ ui/
+â”‚   â””â”€â”€ app.py          # Web UI (FastAPI + HTMX, optional)
+â”œâ”€â”€ config.py           # Configuration & settings
+â””â”€â”€ utils.py            # Shared utilities (hashing, file type detection)
 ```
 
 ## Quick Start
@@ -145,6 +145,7 @@ python -m localarchive.cli classify-evaluate --dataset validation.csv --format c
 # Launch web UI (optional)
 python -m localarchive.cli serve
 # Browser upload page: http://127.0.0.1:8877/ingest
+# Spanish UI example: http://127.0.0.1:8877/?lang=es
 
 # Environment and dependency checks
 python -m localarchive.cli doctor
@@ -182,12 +183,12 @@ python -m localarchive.cli backup restore --path localarchive-backup.zip
 
 ## Core Principles
 
-1. **Local by default** — Everything runs on your machine. No network calls.
-2. **Zero accounts** — No sign-ups, no API keys for basic usage.
-3. **Open formats** — Data stored in SQLite, exports to CSV/JSON/Markdown.
-4. **Privacy first** — Your documents never leave your device.
-5. **Offline always** — Full functionality without internet.
-6. **Free forever** — No fees, no subscriptions, no paywalls.
+1. **Local by default** â€” Everything runs on your machine. No network calls.
+2. **Zero accounts** â€” No sign-ups, no API keys for basic usage.
+3. **Open formats** â€” Data stored in SQLite, exports to CSV/JSON/Markdown.
+4. **Privacy first** â€” Your documents never leave your device.
+5. **Offline always** â€” Full functionality without internet.
+6. **Free forever** â€” No fees, no subscriptions, no paywalls.
 
 ## Tech Stack
 
@@ -225,6 +226,7 @@ host = "127.0.0.1"
 port = 8877
 default_limit = 20
 show_preview_chars = 300
+language = "en"
 
 [watch]
 interval_seconds = 5
@@ -284,7 +286,7 @@ search_paths = ["~/.localarchive/plugins"]
 
 ## Roadmap
 
-### Completed ✓
+### Completed âœ“
 - [x] Project architecture & scaffolding
 - [x] CLI with init, ingest, search, export, tag, process, reprocess, watch, doctor, collections, timeline, audit, backup, serve commands
 - [x] SQLite + FTS5 database layer
@@ -299,31 +301,32 @@ search_paths = ["~/.localarchive/plugins"]
 - [x] Rules-based document classification command (`classify`)
 
 ### Core Features (High Priority)
-- [ ] **Learned smart classification** — Replace rules with stronger local ML model quality
-- [ ] **Table extraction** — Pull structured data from tables in PDFs and images
-- [ ] **Document similarity** — Auto-discover related documents in your archive
-- [ ] **Enhanced web UI** — Drag-and-drop upload, thumbnail previews, mobile-responsive design
-- [ ] **Multi-language OCR** — Expand beyond English with tested support for Spanish, French, German, Chinese, Arabic
-- [ ] **Accessibility features** — Screen reader support, keyboard navigation, high-contrast themes
+- [x] **Learned smart classification** — Replace rules with stronger local ML model quality
+- [x] **Table extraction** — Pull structured data from tables in PDFs and images
+- [x] **Document similarity** — Auto-discover related documents in your archive
+- [ ] **Enhanced web UI** â€” Drag-and-drop upload, thumbnail previews, mobile-responsive design
+- [ ] **Multi-language OCR** â€” Expand beyond English with tested support for Spanish, French, German, Chinese, Arabic
+- [ ] **Accessibility features** â€” Screen reader support, keyboard navigation, high-contrast themes
 
 ### Community & Ecosystem (Medium Priority)
-- [ ] **Plugin architecture** — Allow community-built extractors, exporters, and custom processors
-- [ ] **Localization (i18n)** — Translate UI and documentation to make LocalArchive globally accessible
-- [ ] **Docker containers** — One-command deployment for less technical users
-- [ ] **Pre-built binaries** — Windows .exe, macOS .app, Linux AppImage for non-Python users
-- [ ] **Community template library** — Share extraction rules for common document types (W-2s, insurance forms, research papers)
-- [ ] **Integration connectors** — Email ingestion (IMAP), folder sync daemons, workflow automation hooks
-- [ ] **Educational resources** — Video tutorials, use-case guides, academic partnership programs
+- [x] **Plugin architecture** — Allow community-built extractors, exporters, and custom processors
+- [x] **Localization (i18n)** — Translate UI and documentation to make LocalArchive globally accessible
+- [x] **Docker containers** — One-command deployment for less technical users
+- [ ] **Pre-built binaries** â€” Windows .exe, macOS .app, Linux AppImage for non-Python users
+- [ ] **Community template library** â€” Share extraction rules for common document types (W-2s, insurance forms, research papers)
+- [ ] **Integration connectors** â€” Email ingestion (IMAP), folder sync daemons, workflow automation hooks
+- [ ] **Educational resources** â€” Video tutorials, use-case guides, academic partnership programs
 
 ### Advanced Intelligence (Future)
-- [ ] **Entity relationship graphs** — Visualize connections between documents (invoice → payment → receipt)
-- [ ] **Multi-device sync (CRDT)** — Local-first sync without cloud dependency
-- [ ] **Duplicate detection** — Perceptual hashing to identify duplicate scans
-- [ ] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
-- [ ] **Redaction tools** — Privacy-safe document sharing with automated PII removal
-- [ ] **Version control** — Track document changes over time
-- [ ] **Citation extraction** — Auto-build bibliographies from research papers
+- [ ] **Entity relationship graphs** â€” Visualize connections between documents (invoice â†’ payment â†’ receipt)
+- [ ] **Multi-device sync (CRDT)** â€” Local-first sync without cloud dependency
+- [ ] **Duplicate detection** â€” Perceptual hashing to identify duplicate scans
+- [ ] **Data validation** â€” Confidence scoring and manual review queues for low-confidence extractions
+- [ ] **Redaction tools** â€” Privacy-safe document sharing with automated PII removal
+- [ ] **Version control** â€” Track document changes over time
+- [ ] **Citation extraction** â€” Auto-build bibliographies from research papers
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT License â€” see [LICENSE](LICENSE) for details.
+

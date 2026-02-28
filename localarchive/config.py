@@ -149,6 +149,7 @@ class UIConfig:
     port: int = 8877
     default_limit: int = 20
     show_preview_chars: int = 300
+    language: str = "en"
 
 
 @dataclass
@@ -203,6 +204,7 @@ class Config:
                     show_preview_chars=int(
                         ui_data.get("show_preview_chars", config.ui.show_preview_chars)
                     ),
+                    language=str(ui_data.get("language", config.ui.language)),
                 )
             watch_data = data.get("watch", {})
             if watch_data:
@@ -420,6 +422,9 @@ class Config:
             raise ValueError("ui.default_limit must be >= 1")
         if self.ui.show_preview_chars < 20:
             raise ValueError("ui.show_preview_chars must be >= 20")
+        ui_language = str(self.ui.language).strip()
+        if len(ui_language) != 2 or not ui_language.isalpha():
+            raise ValueError("ui.language must be a 2-letter language code (for example: en, es)")
         if not 0 <= self.autopilot.confidence_threshold <= 1:
             raise ValueError("autopilot.confidence_threshold must be between 0 and 1")
         if self.autopilot.classification_model not in {"rules", "ml"}:
@@ -464,6 +469,7 @@ class Config:
                 "port": self.ui.port,
                 "default_limit": self.ui.default_limit,
                 "show_preview_chars": self.ui.show_preview_chars,
+                "language": self.ui.language,
             },
             "watch": {
                 "interval_seconds": self.watch.interval_seconds,

@@ -80,6 +80,36 @@ def test_ui_index_and_search():
     assert "0 documents found" in res.text
 
 
+def test_ui_language_switch_to_spanish():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi.testclient")
+    from fastapi.testclient import TestClient
+
+    from localarchive.ui.app import create_app
+
+    tmp_path = _workspace_tmp_dir("localarchive-ui-lang")
+    db_path = tmp_path / "ui-lang.db"
+    config = Config(archive_dir=tmp_path / "archive", db_path=db_path)
+    db = Database(db_path)
+    db.initialize()
+    _seed_db(db)
+    db.close()
+
+    app = create_app(config)
+    client = TestClient(app)
+
+    res = client.get("/", params={"lang": "es"})
+    assert res.status_code == 200
+    assert "Subir documentos" in res.text
+    assert "Buscar" in res.text
+    assert 'name="lang" value="es"' in res.text
+
+    detail = client.get("/documents/1", params={"lang": "es"})
+    assert detail.status_code == 200
+    assert "Campos extraidos" in detail.text
+    assert "Documentos relacionados" in detail.text
+
+
 def test_ui_document_detail():
     pytest.importorskip("fastapi")
     pytest.importorskip("fastapi.testclient")
