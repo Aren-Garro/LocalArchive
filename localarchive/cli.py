@@ -87,7 +87,7 @@ def _validate_limit(limit: int) -> None:
 def _run_integrity_check_if_enabled(config: Config, db: Database, context: str) -> None:
     if not config.reliability.integrity_check_on_startup:
         return
-    report = db.audit_verify(repair=False)
+    report = db.audit_verify(repair=False, full_check=False)
     if not report["issues"]:
         console.print(f"[dim]{context}: integrity check passed ({report['checked']} docs).[/dim]")
         return
@@ -409,6 +409,7 @@ def tag(doc_id: int, tags: tuple[str]):
 @click.option("--max-errors", type=int, default=None, help="Abort run after this many errors.")
 @click.option("--resume", is_flag=True, help="Resume from latest processing checkpoint.")
 @click.option("--from-run", type=int, default=None, help="Resume from a specific processing run ID.")
+@click.option("--json", "as_json", is_flag=True, help="Emit process run summary as JSON.")
 def process(
     limit: int | None,
     workers: int | None,
@@ -419,6 +420,7 @@ def process(
     max_errors: int | None,
     resume: bool,
     from_run: int | None,
+    as_json: bool,
 ):
     """Run OCR and field extraction on pending documents."""
     from localarchive.core.ocr_engine import get_ocr_engine, pdf_to_images, extract_text_from_pdf_native
@@ -460,7 +462,10 @@ def process(
         return
     if dry_run:
         doc_ids = [int(doc["id"]) for doc in pending]
-        console.print(f"[yellow]Dry run:[/yellow] would process {len(doc_ids)} document(s): {doc_ids}")
+        if as_json:
+            _emit_json({"dry_run": True, "count": len(doc_ids), "doc_ids": doc_ids})
+        else:
+            console.print(f"[yellow]Dry run:[/yellow] would process {len(doc_ids)} document(s): {doc_ids}")
         db.close()
         return
     mode = extractor_mode or config.extraction.strategy
@@ -635,8 +640,21 @@ def process(
         errors=error_count,
         aborted_reason=aborted_reason,
     )
+    run_meta = db.get_processing_run(run_id) or {}
     db.close()
-    if aborted_reason:
+    if as_json:
+        _emit_json(
+            {
+                "run_id": run_id,
+                "status": final_status,
+                "processed": processed_count,
+                "errors": error_count,
+                "aborted_reason": aborted_reason,
+                "checkpoint_doc_id": int(run_meta.get("checkpoint_doc_id", 0) or 0),
+                "total_candidates": len(pending),
+            }
+        )
+    elif aborted_reason:
         console.print(f"\n[yellow]Processing aborted:[/yellow] {aborted_reason}")
     else:
         console.print("\n[green]Processing complete.[/green]")
@@ -873,7 +891,7 @@ def audit(repair: bool):
     """Verify archive integrity and index consistency."""
     config = get_config()
     db = get_db(config)
-    report = db.audit_verify(repair=repair)
+    report = db.audit_verify(repair=repair, full_check=True)
     db.close()
     console.print(f"Checked {report['checked']} documents.")
     if not report["issues"]:
@@ -896,7 +914,7 @@ def verify(full_verify: bool, as_json: bool):
     """Run archive verification with actionable output."""
     config = get_config()
     db = get_db(config)
-    report = db.audit_verify(repair=False)
+    report = db.audit_verify(repair=False, full_check=full_verify)
     db.close()
     level = "full" if full_verify else "quick"
     if as_json:
@@ -996,6 +1014,7 @@ def backup_create(backup_path: Path):
                 old_path.unlink()
         except Exception:
             pass
+        db.delete_backup_record(str(old.get("path", "")))
     db.close()
     try:
         snapshot_path.unlink(missing_ok=True)
@@ -1076,7 +1095,7 @@ def backup_restore(backup_path: Path):
         console.print(f"[green]Backup restored from:[/green] {backup_path}")
         if config.reliability.auto_verify_after_restore:
             verify_db = get_db(config)
-            verify_report = verify_db.audit_verify(repair=False)
+            verify_report = verify_db.audit_verify(repair=False, full_check=False)
             verify_db.close()
             if verify_report["issues"]:
                 raise CLIError(

@@ -94,6 +94,7 @@ python -m localarchive.cli process --workers 4 --commit-batch-size 20
 python -m localarchive.cli process --dry-run
 python -m localarchive.cli process --resume
 python -m localarchive.cli process --from-run 12 --max-errors 10
+python -m localarchive.cli process --json
 
 # Requeue failed documents for OCR retry
 python -m localarchive.cli reprocess --status error
@@ -142,6 +143,7 @@ python -m localarchive.cli timeline --entity topic
 python -m localarchive.cli audit
 python -m localarchive.cli audit --repair
 python -m localarchive.cli verify --json
+python -m localarchive.cli verify --full --json
 
 # Local backup / restore
 python -m localarchive.cli backup create --path localarchive-backup.zip

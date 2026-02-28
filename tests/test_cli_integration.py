@@ -6,6 +6,7 @@ import sys
 import zipfile
 import tempfile
 import time
+import json
 from pathlib import Path
 from click.testing import CliRunner
 
@@ -215,6 +216,34 @@ def test_collections_timeline_backup_and_audit(monkeypatch):
 
     result = runner.invoke(main, ["audit"])
     assert result.exit_code in (0, 4)
+
+
+def test_backup_retention_keeps_newest_only(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-backup-retention")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.reliability.backup_retention_count = 1
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.close()
+
+    runner = CliRunner()
+    backup1 = tmp_path / "backup1.zip"
+    backup2 = tmp_path / "backup2.zip"
+    result = runner.invoke(main, ["backup", "create", "--path", str(backup1)])
+    assert result.exit_code == 0
+    assert backup1.exists()
+    result = runner.invoke(main, ["backup", "create", "--path", str(backup2)])
+    assert result.exit_code == 0
+    assert backup2.exists()
+    assert not backup1.exists()
+
+    result = runner.invoke(main, ["backup", "list", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert int(payload.get("count", 0)) == 1
+    assert payload["backups"][0]["path"].endswith("backup2.zip")
 
 
 def test_backup_restore_rejects_unsafe_paths(monkeypatch):
@@ -662,3 +691,69 @@ def test_verify_json_reports_issues(monkeypatch):
     result = runner.invoke(main, ["verify", "--json"])
     assert result.exit_code == 4
     assert '"issues"' in result.output
+
+
+def test_verify_quick_vs_full_hash_mismatch(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-verify-modes")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    existing = tmp_path / "existing.pdf"
+    existing.write_bytes(b"%PDF-1.4 content")
+    db.insert_document(
+        filename=existing.name,
+        filepath=str(existing),
+        file_hash="incorrect-hash",
+        file_type="pdf",
+        file_size=existing.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.close()
+
+    runner = CliRunner()
+    quick = runner.invoke(main, ["verify", "--json"])
+    assert quick.exit_code == 0
+    assert '"full_check": false' in quick.output
+    full = runner.invoke(main, ["verify", "--full", "--json"])
+    assert full.exit_code == 4
+    assert '"full_check": true' in full.output
+
+
+def test_process_json_summary(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-process-json")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    fake_ocr_module = types.SimpleNamespace(
+        get_ocr_engine=lambda _cfg: _FakeOCR(),
+        pdf_to_images=lambda _path, tmp_dir=None: [],
+        extract_text_from_pdf_native=lambda _path: "",
+    )
+    monkeypatch.setitem(sys.modules, "localarchive.core.ocr_engine", fake_ocr_module)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "doc.png"
+    source.write_bytes(b"x")
+    db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="process-json-1",
+        file_type="png",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="pending_ocr",
+    )
+    db.close()
+
+    runner = CliRunner()
+    dry = runner.invoke(main, ["process", "--dry-run", "--json"])
+    assert dry.exit_code == 0
+    assert '"dry_run": true' in dry.output
+
+    run = runner.invoke(main, ["process", "--json", "--workers", "1"])
+    assert run.exit_code == 0
+    assert '"run_id"' in run.output
+    assert '"status": "completed"' in run.output

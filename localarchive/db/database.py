@@ -461,10 +461,14 @@ class Database:
 
     def list_backups(self, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT * FROM backups ORDER BY created_at DESC LIMIT ?",
+            "SELECT * FROM backups ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def delete_backup_record(self, path: str) -> None:
+        self.conn.execute("DELETE FROM backups WHERE path = ?", (path,))
+        self.conn.commit()
 
     def upsert_collection(self, name: str, description: str = "") -> int:
         now = timestamp_now()
@@ -563,7 +567,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def audit_verify(self, repair: bool = False) -> dict:
+    def audit_verify(self, repair: bool = False, full_check: bool = True) -> dict:
         issues = []
         checked = 0
         for doc in self.iter_documents(batch_size=1000):
@@ -572,12 +576,13 @@ class Database:
             if not fpath.exists():
                 issues.append({"id": doc["id"], "issue": "missing_file", "path": str(fpath)})
                 continue
-            try:
-                actual_hash = file_hash(fpath)
-                if actual_hash != doc["file_hash"]:
-                    issues.append({"id": doc["id"], "issue": "hash_mismatch", "path": str(fpath)})
-            except Exception:
-                issues.append({"id": doc["id"], "issue": "hash_error", "path": str(fpath)})
+            if full_check:
+                try:
+                    actual_hash = file_hash(fpath)
+                    if actual_hash != doc["file_hash"]:
+                        issues.append({"id": doc["id"], "issue": "hash_mismatch", "path": str(fpath)})
+                except Exception:
+                    issues.append({"id": doc["id"], "issue": "hash_error", "path": str(fpath)})
 
         docs_count = self.conn.execute("SELECT COUNT(*) as c FROM documents").fetchone()["c"]
         fts_count = self.conn.execute("SELECT COUNT(*) as c FROM documents_fts").fetchone()["c"]
@@ -587,4 +592,4 @@ class Database:
                 self.conn.execute("INSERT INTO documents_fts(documents_fts) VALUES ('rebuild')")
                 self.conn.commit()
 
-        return {"checked": checked, "issues": issues}
+        return {"checked": checked, "issues": issues, "full_check": full_check}
