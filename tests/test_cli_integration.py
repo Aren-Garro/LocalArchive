@@ -559,6 +559,45 @@ def test_process_checkpoint_uses_max_completed_doc_id(monkeypatch):
     assert int(run["checkpoint_doc_id"]) == max(doc_ids)
 
 
+def test_process_resume_messages(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-resume-msg")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    fake_ocr_module = types.SimpleNamespace(
+        get_ocr_engine=lambda _cfg: _FakeOCR(),
+        pdf_to_images=lambda _path, tmp_dir=None: [],
+        extract_text_from_pdf_native=lambda _path: "",
+    )
+    monkeypatch.setitem(sys.modules, "localarchive.core.ocr_engine", fake_ocr_module)
+
+    db = Database(config.db_path)
+    db.initialize()
+    src = tmp_path / "doc.png"
+    src.write_bytes(b"x")
+    db.insert_document(
+        filename=src.name,
+        filepath=str(src),
+        file_hash="resume-msg-1",
+        file_type="png",
+        file_size=src.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="pending_ocr",
+    )
+    db.close()
+
+    runner = CliRunner()
+    first = runner.invoke(main, ["process", "--dry-run", "--resume"])
+    assert first.exit_code == 0
+    assert "No checkpointed run found" in first.output or "would process" in first.output
+
+    run_live = runner.invoke(main, ["process", "--workers", "1"])
+    assert run_live.exit_code == 0
+
+    second = runner.invoke(main, ["process", "--dry-run", "--resume"])
+    assert second.exit_code == 0
+    assert "Resuming from run" in second.output
+
+
 def test_doctor_json_output(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-doctor-json")
     config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")

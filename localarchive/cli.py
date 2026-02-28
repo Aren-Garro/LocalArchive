@@ -447,6 +447,11 @@ def process(
         resume_run = db.latest_processing_run()
     if resume_run:
         after_doc_id = int(resume_run.get("checkpoint_doc_id") or 0)
+        console.print(
+            f"[dim]Resuming from run {resume_run.get('id')} with checkpoint_doc_id={after_doc_id}[/dim]"
+        )
+    elif resume or from_run is not None:
+        console.print("[yellow]No checkpointed run found; starting from earliest pending document.[/yellow]")
     pending = db.list_documents_for_processing(limit=max_docs, after_doc_id=after_doc_id)
     if not pending:
         console.print("[dim]No documents pending OCR for the selected scope.[/dim]")
