@@ -4,22 +4,13 @@ Commands: init, ingest, search, export, tag, process, classify, reprocess, watch
 doctor, collections, timeline, audit, verify, backup, serve
 """
 
-import concurrent.futures
-import contextlib
-import email
-import imaplib
+import imaplib  # noqa: F401 - compatibility for tests monkeypatching localarchive.cli.imaplib
 import importlib.util
-import io
 import json
-import os
-import shutil
 import sqlite3
-import tempfile
-import threading
-import time
 import zipfile
 from email.header import decode_header
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from uuid import uuid4
 
 import click
@@ -30,7 +21,7 @@ from localarchive.config import DEFAULT_CONFIG_PATH, Config
 from localarchive.core.ingester import Ingester, watch_directory
 from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
-from localarchive.utils import file_hash, is_supported, safe_filename
+from localarchive.utils import file_hash
 
 console = Console()
 BACKUP_RESTORE_MAX_MEMBER_BYTES = 256 * 1024 * 1024
@@ -337,146 +328,23 @@ def search(
     as_json: bool,
 ):
     """Search documents in the archive."""
-    config = get_config()
-    max_results = limit if limit is not None else config.ui.default_limit
-    _validate_limit(max_results)
-    if legacy_file_type and not file_type:
-        file_type = legacy_file_type
-        console.print("[yellow]`--type` is deprecated. Use `--file-type`.[/yellow]")
-    db = get_db(config)
-    engine = SearchEngine(db)
-    if semantic:
-        bm25_weight, vector_weight = _validate_hybrid_weights(bm25_weight, vector_weight)
-    if semantic and config.search.enable_semantic:
-        results = engine.search_hybrid(
-            query,
-            limit=max_results,
-            tag=tag,
-            file_type=file_type,
-            bm25_weight=bm25_weight,
-            vector_weight=vector_weight,
-        )
-    else:
-        results = engine.search(query, limit=max_results, tag=tag, file_type=file_type)
-    fuzzy_enabled = fuzzy or config.search.enable_fuzzy
-    if fuzzy_enabled:
-        threshold = (
-            fuzzy_threshold if fuzzy_threshold is not None else config.search.fuzzy_threshold
-        )
-        max_candidates = (
-            fuzzy_max_candidates
-            if fuzzy_max_candidates is not None
-            else config.search.fuzzy_max_candidates
-        )
-        _validate_threshold("fuzzy-threshold", threshold)
-        _validate_limit(max_candidates)
-        fuzzy_results = engine.search_fuzzy(
-            query,
-            limit=max_results,
-            tag=tag,
-            file_type=file_type,
-            threshold=threshold,
-            max_candidates=max_candidates,
-        )
-        if results:
-            seen = {int(doc["id"]) for doc in results}
-            for doc in fuzzy_results:
-                if int(doc["id"]) in seen:
-                    continue
-                results.append(doc)
-                seen.add(int(doc["id"]))
-                if len(results) >= max_results:
-                    break
-        else:
-            results = fuzzy_results
-    if semantic and not config.search.enable_semantic:
-        console.print(
-            "[yellow]Semantic search is disabled in config.search.enable_semantic; using BM25 only.[/yellow]"
-        )
-    if semantic:
-        console.print(
-            f"[dim]Hybrid search request: bm25_weight={bm25_weight:.2f}, vector_weight={vector_weight:.2f}[/dim]"
-        )
-    if fuzzy_enabled:
-        console.print(
-            f"[dim]Fuzzy search enabled: threshold={threshold:.2f} candidates={max_candidates}[/dim]"
-        )
-    if not results:
-        if as_json:
-            _emit_json(
-                {
-                    "query": query,
-                    "count": 0,
-                    "semantic": bool(semantic and config.search.enable_semantic),
-                    "fuzzy": bool(fuzzy_enabled),
-                    "results": [],
-                }
-            )
-        else:
-            console.print("[yellow]No results found.[/yellow]")
-            console.print(
-                '[dim]Hint: try `localarchive search "<term>" --fuzzy` or broaden filters.[/dim]'
-            )
-        db.close()
-        return
-    if as_json:
-        payload = {
-            "query": query,
-            "count": len(results),
-            "semantic": bool(semantic and config.search.enable_semantic),
-            "fuzzy": bool(fuzzy_enabled),
-            "results": [],
-        }
-        for doc in results:
-            item = {
-                "id": int(doc["id"]),
-                "filename": doc["filename"],
-                "file_type": doc.get("file_type"),
-                "ingested_at": doc.get("ingested_at"),
-                "preview": (doc.get("ocr_text") or "")[:120],
-            }
-            if "rank" in doc:
-                item["rank"] = doc["rank"]
-            if "hybrid_score" in doc:
-                item["hybrid_score"] = doc["hybrid_score"]
-            if "fuzzy_score" in doc:
-                item["fuzzy_score"] = doc["fuzzy_score"]
-            payload["results"].append(item)
-        _emit_json(payload)
-        db.close()
-        return
-    table = Table(title=f"Search: {query}")
-    table.add_column("ID", style="cyan", width=6)
-    table.add_column("Filename", style="bold")
-    table.add_column("Type", width=6)
-    table.add_column("Ingested", width=22)
-    table.add_column("Preview", max_width=50)
-    for doc in results:
-        preview = (doc.get("ocr_text") or "")[:80]
-        table.add_row(
-            str(doc["id"]),
-            doc["filename"],
-            doc.get("file_type", "?"),
-            doc.get("ingested_at", ""),
-            preview,
-        )
-    console.print(table)
-    if explain_ranking:
-        rank_table = Table(title="Ranking Explanation")
-        rank_table.add_column("ID", style="cyan", width=6)
-        rank_table.add_column("rank", width=12)
-        rank_table.add_column("hybrid", width=12)
-        rank_table.add_column("fuzzy", width=12)
-        for doc in results:
-            rank_table.add_row(
-                str(doc["id"]),
-                str(round(float(doc.get("rank", 0.0)), 6)) if "rank" in doc else "-",
-                str(doc.get("hybrid_score", "-")),
-                str(doc.get("fuzzy_score", "-")),
-            )
-        console.print(rank_table)
-    console.print(f"\n[dim]{len(results)} result(s)[/dim]")
-    db.close()
+    from localarchive.cli_commands.search_cmd import run_search
+
+    run_search(
+        query=query,
+        tag=tag,
+        file_type=file_type,
+        legacy_file_type=legacy_file_type,
+        limit=limit,
+        semantic=semantic,
+        bm25_weight=bm25_weight,
+        vector_weight=vector_weight,
+        fuzzy=fuzzy,
+        fuzzy_threshold=fuzzy_threshold,
+        fuzzy_max_candidates=fuzzy_max_candidates,
+        explain_ranking=explain_ranking,
+        as_json=as_json,
+    )
 
 
 @main.command()
@@ -582,323 +450,22 @@ def process(
     as_json: bool,
 ):
     """Run OCR and field extraction on pending documents."""
-    from localarchive.core.extractor import extract_fields
-    from localarchive.core.ocr_engine import (
-        extract_text_from_pdf_native,
-        get_ocr_engine,
-        pdf_to_images,
-    )
-    from localarchive.core.table_extractor import extract_tables_from_text
+    from localarchive.cli_commands.process_cmd import run_process
 
-    config = get_config()
-    max_docs = limit if limit is not None else config.processing.default_limit
-    _validate_limit(max_docs)
-    worker_count = workers if workers is not None else config.runtime.max_workers
-    _validate_limit(worker_count)
-    commit_size = (
-        commit_batch_size if commit_batch_size is not None else config.processing.commit_batch_size
+    run_process(
+        limit=limit,
+        workers=workers,
+        commit_batch_size=commit_batch_size,
+        checkpoint_every=checkpoint_every,
+        extractor_mode=extractor_mode,
+        extract_tables=extract_tables,
+        dry_run=dry_run,
+        max_errors=max_errors,
+        resume=resume,
+        from_run=from_run,
+        ocr_languages=ocr_languages,
+        as_json=as_json,
     )
-    _validate_limit(commit_size)
-    checkpoint_size = (
-        checkpoint_every
-        if checkpoint_every is not None
-        else config.reliability.checkpoint_batch_size
-    )
-    _validate_limit(checkpoint_size)
-    max_error_budget = (
-        max_errors if max_errors is not None else config.processing.max_errors_per_run
-    )
-    _validate_limit(max_error_budget)
-    resolved_ocr_languages = _parse_ocr_languages(ocr_languages, config.ocr.languages)
-    config.ocr.languages = resolved_ocr_languages
-    db = get_db(config)
-    _run_integrity_check_if_enabled(config, db, "process")
-    resume_run = None
-    after_doc_id = 0
-    if from_run is not None:
-        resume_run = db.get_processing_run(from_run)
-        if not resume_run:
-            db.close()
-            raise CLIError(f"Processing run {from_run} not found.", exit_code=2)
-    elif resume:
-        resume_run = db.latest_processing_run()
-    if resume_run:
-        after_doc_id = int(resume_run.get("checkpoint_doc_id") or 0)
-        console.print(
-            f"[dim]Resuming from run {resume_run.get('id')} with checkpoint_doc_id={after_doc_id}[/dim]"
-        )
-    elif resume or from_run is not None:
-        console.print(
-            "[yellow]No checkpointed run found; starting from earliest pending document.[/yellow]"
-        )
-    pending = db.list_documents_for_processing(limit=max_docs, after_doc_id=after_doc_id)
-    if not pending:
-        if as_json:
-            _emit_json(
-                {
-                    "run_id": None,
-                    "status": "noop",
-                    "processed": 0,
-                    "errors": 0,
-                    "aborted_reason": "",
-                    "ocr_languages": resolved_ocr_languages,
-                    "extract_tables": bool(extract_tables),
-                    "checkpoint_doc_id": after_doc_id,
-                    "total_candidates": 0,
-                }
-            )
-        else:
-            console.print("[dim]No documents pending OCR for the selected scope.[/dim]")
-            console.print("[dim]Hint: run `localarchive ingest <file_or_folder>` first.[/dim]")
-        db.close()
-        return
-    if dry_run:
-        doc_ids = [int(doc["id"]) for doc in pending]
-        if as_json:
-            _emit_json(
-                {
-                    "dry_run": True,
-                    "count": len(doc_ids),
-                    "doc_ids": doc_ids,
-                    "ocr_languages": resolved_ocr_languages,
-                    "extract_tables": bool(extract_tables),
-                    "resumed_from_run": int(resume_run.get("id")) if resume_run else None,
-                    "start_after_doc_id": after_doc_id,
-                }
-            )
-        else:
-            console.print(
-                f"[yellow]Dry run:[/yellow] would process {len(doc_ids)} document(s): {doc_ids}"
-            )
-        db.close()
-        return
-    mode = extractor_mode or config.extraction.strategy
-    run_id = db.start_processing_run(engine=config.ocr.engine, extractor=mode)
-    db.add_processing_event(
-        run_id,
-        document_id=None,
-        event_type="config",
-        message=f"ocr_languages={','.join(resolved_ocr_languages)}",
-    )
-    db.add_processing_event(
-        run_id,
-        document_id=None,
-        event_type="config",
-        message=f"extract_tables={str(bool(extract_tables)).lower()}",
-    )
-    processed_count = 0
-    error_count = 0
-    completed_count = 0
-    max_completed_doc_id = 0
-    success_buffer: list[dict] = []
-    error_buffer: list[dict] = []
-    event_buffer: list[dict] = []
-    attempts_by_doc = {int(doc["id"]): int(doc.get("processing_attempts", 0)) for doc in pending}
-    flush_ms = max(10, config.processing.writer_flush_ms)
-    checkpoint_interval = max(1, config.processing.resume_checkpoint_interval)
-    last_flush_at = time.monotonic()
-    aborted_reason = ""
-    console.print(f"Processing [bold]{len(pending)}[/bold] documents...\n")
-    if config.runtime.fail_fast and worker_count > 1:
-        console.print(
-            "[yellow]Fail-fast enabled; forcing single-worker processing for deterministic stop behavior.[/yellow]"
-        )
-        worker_count = 1
-    thread_local = threading.local()
-
-    def _get_worker_ocr():
-        engine = getattr(thread_local, "ocr_engine", None)
-        if engine is None:
-            engine = get_ocr_engine(config.ocr)
-            thread_local.ocr_engine = engine
-        return engine
-
-    def _process_document(doc: dict) -> dict:
-        filepath = Path(doc["filepath"])
-        temp_images: list[Path] = []
-        try:
-            full_text = ""
-            if doc["file_type"] == "pdf":
-                native_text = extract_text_from_pdf_native(filepath)
-                if len(native_text.strip()) > config.processing.pdf_native_text_min_chars:
-                    full_text = native_text
-                else:
-                    temp_images = pdf_to_images(filepath, tmp_dir=config.runtime.tmp_dir)
-                    ocr_engine = _get_worker_ocr()
-                    for img_path in temp_images:
-                        entries = ocr_engine.extract_text(img_path)
-                        full_text += " ".join(e["text"] for e in entries) + "\n"
-            else:
-                ocr_engine = _get_worker_ocr()
-                entries = ocr_engine.extract_text(filepath)
-                full_text = " ".join(e["text"] for e in entries)
-            fields = extract_fields(full_text, mode=mode, config=config.extraction)
-            field_dicts = [
-                {
-                    "field_type": f.field_type,
-                    "value": f.value,
-                    "raw_match": f.raw_match,
-                    "start": f.start,
-                }
-                for f in fields
-            ]
-            table_dicts = extract_tables_from_text(full_text) if extract_tables else []
-            return {
-                "doc_id": doc["id"],
-                "filename": doc["filename"],
-                "full_text": full_text,
-                "fields": field_dicts,
-                "tables": table_dicts,
-            }
-        finally:
-            if config.runtime.cleanup_temp_files:
-                for img_path in temp_images:
-                    img_path.unlink(missing_ok=True)
-
-    def _flush_buffers(force: bool = False):
-        nonlocal last_flush_at
-        buffer_size = len(success_buffer) + len(error_buffer)
-        elapsed_ms = (time.monotonic() - last_flush_at) * 1000
-        if not force and buffer_size < commit_size and elapsed_ms < flush_ms:
-            return
-        if success_buffer:
-            db.update_processed_documents_batch(success_buffer)
-            for item in success_buffer:
-                db.set_tables(int(item["doc_id"]), item.get("tables") or [])
-            success_buffer.clear()
-        if error_buffer:
-            db.record_processing_errors_batch(
-                error_buffer, max_retries=config.reliability.max_retries
-            )
-            error_buffer.clear()
-        if event_buffer:
-            db.add_processing_events_batch(event_buffer)
-            event_buffer.clear()
-        last_flush_at = time.monotonic()
-
-    def _handle_result(result: dict):
-        nonlocal processed_count, error_count, completed_count, max_completed_doc_id
-        doc_id = result["doc_id"]
-        max_completed_doc_id = max(max_completed_doc_id, int(doc_id))
-        filename = result["filename"]
-        error = result.get("error")
-        if error:
-            attempts_by_doc[doc_id] = attempts_by_doc.get(doc_id, 0) + 1
-            terminal = attempts_by_doc[doc_id] >= config.reliability.max_retries
-            error_buffer.append({"doc_id": doc_id, "error": str(error)})
-            event_buffer.append(
-                {
-                    "run_id": run_id,
-                    "document_id": doc_id,
-                    "event_type": "error",
-                    "message": f"{error} (attempt {attempts_by_doc[doc_id]}/{config.reliability.max_retries})",
-                }
-            )
-            error_count += 1
-            if terminal:
-                console.print(
-                    f"  -> {filename}... [red]error[/red]: {error} "
-                    f"(attempt {attempts_by_doc[doc_id]}/{config.reliability.max_retries}, max retries exceeded)"
-                )
-            else:
-                console.print(
-                    f"  -> {filename}... [red]error[/red]: {error} "
-                    f"(attempt {attempts_by_doc[doc_id]}/{config.reliability.max_retries})"
-                )
-        else:
-            success_buffer.append(result)
-            event_buffer.append(
-                {
-                    "run_id": run_id,
-                    "document_id": doc_id,
-                    "event_type": "processed",
-                    "message": f"{len(result['fields'])} fields, {len(result.get('tables') or [])} tables",
-                }
-            )
-            processed_count += 1
-            console.print(
-                f"  -> {filename}... [green]done[/green] "
-                f"({len(result['fields'])} fields, {len(result.get('tables') or [])} tables)"
-            )
-        completed_count += 1
-        if completed_count % checkpoint_size == 0:
-            console.print(
-                f"[dim]Progress checkpoint: {completed_count}/{len(pending)} "
-                f"(processed={processed_count}, errors={error_count})[/dim]"
-            )
-        _flush_buffers(force=False)
-        if completed_count % checkpoint_interval == 0:
-            db.update_processing_checkpoint(run_id, checkpoint_doc_id=max_completed_doc_id)
-        if error_count >= max_error_budget:
-            raise RuntimeError(f"max_errors_exceeded:{max_error_budget}")
-
-    if worker_count == 1:
-        for doc in pending:
-            try:
-                result = _process_document(doc)
-            except Exception as e:
-                result = {"doc_id": doc["id"], "filename": doc["filename"], "error": e}
-            try:
-                _handle_result(result)
-            except RuntimeError as e:
-                aborted_reason = str(e)
-                break
-            if config.runtime.fail_fast and result.get("error"):
-                aborted_reason = "fail_fast_triggered"
-                break
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {executor.submit(_process_document, doc): doc for doc in pending}
-            for future in concurrent.futures.as_completed(futures):
-                doc = futures[future]
-                try:
-                    result = future.result()
-                except Exception as e:
-                    result = {"doc_id": doc["id"], "filename": doc["filename"], "error": e}
-                try:
-                    _handle_result(result)
-                except RuntimeError as e:
-                    aborted_reason = str(e)
-                    for pending_future in futures:
-                        if not pending_future.done():
-                            pending_future.cancel()
-                    break
-    _flush_buffers(force=True)
-    if completed_count > 0:
-        db.update_processing_checkpoint(run_id, checkpoint_doc_id=max_completed_doc_id)
-    if aborted_reason:
-        final_status = "aborted"
-    else:
-        final_status = "completed" if error_count == 0 else "completed_with_errors"
-    db.finish_processing_run(
-        run_id,
-        status=final_status,
-        processed=processed_count,
-        errors=error_count,
-        aborted_reason=aborted_reason,
-    )
-    run_meta = db.get_processing_run(run_id) or {}
-    db.close()
-    if as_json:
-        _emit_json(
-            {
-                "run_id": run_id,
-                "status": final_status,
-                "processed": processed_count,
-                "errors": error_count,
-                "aborted_reason": aborted_reason,
-                "ocr_languages": resolved_ocr_languages,
-                "extract_tables": bool(extract_tables),
-                "checkpoint_doc_id": int(run_meta.get("checkpoint_doc_id", 0) or 0),
-                "total_candidates": len(pending),
-                "resumed_from_run": int(resume_run.get("id")) if resume_run else None,
-                "start_after_doc_id": after_doc_id,
-            }
-        )
-    elif aborted_reason:
-        console.print(f"\n[yellow]Processing aborted:[/yellow] {aborted_reason}")
-    else:
-        console.print("\n[green]Processing complete.[/green]")
 
 
 @main.command()
@@ -1669,191 +1236,14 @@ def backup_create(backup_path: Path, as_json: bool, dry_run: bool):
 @click.option("--json", "as_json", is_flag=True, help="Emit restore summary as JSON.")
 def backup_restore(backup_path: Path | None, use_latest: bool, dry_run: bool, as_json: bool):
     """Restore DB and archive data from a backup archive."""
-    config = get_config()
-    config.ensure_dirs()
-    cfg_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
-    if bool(backup_path) == bool(use_latest):
-        raise CLIError("Specify exactly one of --path or --latest.", exit_code=2)
-    if use_latest:
-        db = get_db(config)
-        rows = db.list_backups(limit=1)
-        db.close()
-        if not rows:
-            raise CLIError(
-                "No tracked backups found. Create one with `backup create` first.", exit_code=2
-            )
-        selected = Path(str(rows[0].get("path", "")))
-        if not selected.exists():
-            raise CLIError(
-                f"Newest tracked backup is missing on disk: {selected}. Run `backup list --prune-missing` and retry.",
-                exit_code=2,
-            )
-        backup_path = selected
-    if backup_path is None or not backup_path.exists():
-        raise CLIError(f"Backup path does not exist: {backup_path}", exit_code=2)
-    try:
-        with zipfile.ZipFile(backup_path, "r") as zf:
-            infos = {info.filename: info for info in zf.infolist()}
-            members = set(infos)
-            for name in members:
-                posix = PurePosixPath(name)
-                if posix.is_absolute() or ".." in posix.parts:
-                    raise CLIError(f"Unsafe backup entry path: {name}", exit_code=2)
-            has_db = "archive.db" in members
-            has_config = "config.toml" in members
-            create_count = 0
-            overwrite_count = 0
-            archive_entries: list[str] = []
-            for name in members:
-                if not name.startswith("archive_data/") or name.endswith("/"):
-                    continue
-                rel = Path(*PurePosixPath(name).parts[1:])
-                archive_entries.append(name)
-                dest = config.archive_dir / rel
-                if dest.exists():
-                    overwrite_count += 1
-                else:
-                    create_count += 1
-            if len(archive_entries) > BACKUP_RESTORE_MAX_ARCHIVE_FILES:
-                raise CLIError(
-                    "Backup restore failed: archive contains too many files to restore safely.",
-                    exit_code=4,
-                )
-            summary = {
-                "backup": str(backup_path),
-                "has_database": has_db,
-                "has_config": has_config,
-                "archive_files": len(archive_entries),
-                "would_create": create_count,
-                "would_overwrite": overwrite_count,
-            }
-    except CLIError:
-        raise
-    except Exception as exc:
-        raise CLIError(f"Backup restore failed: {exc}", exit_code=4) from exc
+    from localarchive.cli_commands.backup_cmd import run_backup_restore
 
-    if dry_run:
-        payload = {"dry_run": True, **summary}
-        if as_json:
-            _emit_json(payload)
-            return
-        console.print("[bold]Restore Dry Run[/bold]")
-        console.print(f"Backup: {summary['backup']}")
-        console.print(f"Contains DB: {'yes' if summary['has_database'] else 'no'}")
-        console.print(f"Contains config: {'yes' if summary['has_config'] else 'no'}")
-        console.print(f"Archive files: {summary['archive_files']}")
-        console.print(f"Would create: {summary['would_create']}")
-        console.print(f"Would overwrite: {summary['would_overwrite']}")
-        return
-
-    staging_dir = Path(tempfile.mkdtemp(prefix="restore-", dir=str(config.runtime.tmp_dir)))
-    rollback_dir = Path(tempfile.mkdtemp(prefix="rollback-", dir=str(config.runtime.tmp_dir)))
-    moved_pairs: list[tuple[Path, Path]] = []
-    created_paths: list[Path] = []
-    verify_issue_count = 0
-    limits = {"total": 0}
-    try:
-        with zipfile.ZipFile(backup_path, "r") as zf:
-            infos = {info.filename: info for info in zf.infolist()}
-            if "archive.db" in members:
-                _copy_zip_member_limited(
-                    zf,
-                    infos["archive.db"],
-                    staging_dir / "archive.db",
-                    limits,
-                )
-            if "config.toml" in members:
-                _copy_zip_member_limited(
-                    zf,
-                    infos["config.toml"],
-                    staging_dir / "config.toml",
-                    limits,
-                )
-            for name in members:
-                if not name.startswith("archive_data/") or name.endswith("/"):
-                    continue
-                rel = Path(*PurePosixPath(name).parts[1:])
-                staged = staging_dir / "archive_data" / rel
-                _copy_zip_member_limited(
-                    zf,
-                    infos[name],
-                    staged,
-                    limits,
-                )
-
-        staged_db = staging_dir / "archive.db"
-        if staged_db.exists():
-            config.db_path.parent.mkdir(parents=True, exist_ok=True)
-            if config.db_path.exists():
-                backup_existing = rollback_dir / "archive.db.old"
-                shutil.move(str(config.db_path), str(backup_existing))
-                moved_pairs.append((backup_existing, config.db_path))
-            shutil.move(str(staged_db), str(config.db_path))
-
-        staged_cfg = staging_dir / "config.toml"
-        if staged_cfg.exists():
-            cfg_path.parent.mkdir(parents=True, exist_ok=True)
-            if cfg_path.exists():
-                backup_existing = rollback_dir / "config.toml.old"
-                shutil.move(str(cfg_path), str(backup_existing))
-                moved_pairs.append((backup_existing, cfg_path))
-            shutil.move(str(staged_cfg), str(cfg_path))
-
-        staged_archive_root = staging_dir / "archive_data"
-        if staged_archive_root.exists():
-            for staged in staged_archive_root.rglob("*"):
-                if not staged.is_file():
-                    continue
-                rel = staged.relative_to(staged_archive_root)
-                dest = config.archive_dir / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if dest.exists():
-                    backup_existing = rollback_dir / "archive_data" / rel
-                    backup_existing.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(dest), str(backup_existing))
-                    moved_pairs.append((backup_existing, dest))
-                else:
-                    created_paths.append(dest)
-                shutil.move(str(staged), str(dest))
-
-        if config.reliability.auto_verify_after_restore:
-            verify_db = get_db(config)
-            verify_report = verify_db.audit_verify(repair=False, full_check=False)
-            verify_db.close()
-            verify_issue_count = len(verify_report.get("issues") or [])
-            if verify_report["issues"]:
-                raise CLIError(
-                    f"Restore completed but verify found {len(verify_report['issues'])} issue(s).",
-                    exit_code=4,
-                )
-        payload = {"restored": True, **summary, "verify_issues": verify_issue_count}
-        if as_json:
-            _emit_json(payload)
-        else:
-            console.print(f"[green]Backup restored from:[/green] {backup_path}")
-    except Exception as exc:
-        for created in created_paths:
-            try:
-                if created.exists():
-                    created.unlink()
-            except Exception:
-                pass
-        for src, dest in reversed(moved_pairs):
-            try:
-                if src.exists():
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    if dest.exists():
-                        if dest.is_file():
-                            dest.unlink()
-                    shutil.move(str(src), str(dest))
-            except Exception:
-                pass
-        if isinstance(exc, CLIError):
-            raise
-        raise CLIError(f"Backup restore failed: {exc}", exit_code=4) from exc
-    finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)
-        shutil.rmtree(rollback_dir, ignore_errors=True)
+    run_backup_restore(
+        backup_path=backup_path,
+        use_latest=use_latest,
+        dry_run=dry_run,
+        as_json=as_json,
+    )
 
 
 @main.group()
@@ -1885,105 +1275,17 @@ def connectors_imap(
     as_json: bool,
 ):
     """Ingest supported attachments from an IMAP mailbox."""
-    _validate_limit(limit)
-    resolved_password = password or str(os.environ.get("LOCALARCHIVE_IMAP_PASSWORD", ""))
-    if not resolved_password:
-        raise CLIError(
-            "Missing IMAP password. Provide `--password` or set LOCALARCHIVE_IMAP_PASSWORD.",
-            exit_code=2,
-        )
+    from localarchive.cli_commands.connectors_cmd import run_connectors_imap
 
-    config = get_config()
-    config.ensure_dirs()
-    db = get_db(config)
-    ingester = Ingester(config, db)
-    inspected = 0
-    attachments_seen = 0
-    ingested = 0
-    skipped = 0
-    errors = 0
-
-    imap = imaplib.IMAP4_SSL(host)
-    try:
-        imap.login(username, resolved_password)
-        status, _ = imap.select(mailbox)
-        if status != "OK":
-            raise CLIError(f"Failed to open mailbox: {mailbox}", exit_code=3)
-        criteria = "(UNSEEN)" if unseen else "ALL"
-        status, data = imap.search(None, criteria)
-        if status != "OK":
-            raise CLIError("IMAP search failed.", exit_code=3)
-        message_ids = (data[0] or b"").split()
-        selected_ids = list(reversed(message_ids))[:limit]
-        for msg_id in selected_ids:
-            inspected += 1
-            status, payload = imap.fetch(msg_id, "(RFC822)")
-            if status != "OK" or not payload:
-                errors += 1
-                continue
-            raw_email = payload[0][1] if isinstance(payload[0], tuple) and len(payload[0]) > 1 else b""
-            if not raw_email:
-                errors += 1
-                continue
-            msg = email.message_from_bytes(raw_email)
-            for part in msg.walk():
-                if part.get_content_disposition() != "attachment":
-                    continue
-                name = safe_filename(
-                    Path(_decode_mime_value(part.get_filename()) or "attachment.bin").name
-                )
-                if not name:
-                    skipped += 1
-                    continue
-                if not is_supported(Path(name)):
-                    skipped += 1
-                    continue
-                body = part.get_payload(decode=True) or b""
-                attachments_seen += 1
-                if dry_run:
-                    continue
-                fd, tmp_name = tempfile.mkstemp(
-                    prefix="imap-",
-                    suffix=Path(name).suffix.lower(),
-                    dir=str(config.runtime.tmp_dir),
-                )
-                tmp_path = Path(tmp_name)
-                try:
-                    with open(fd, "wb", closefd=True) as handle:
-                        handle.write(body)
-                    if as_json:
-                        with contextlib.redirect_stdout(io.StringIO()):
-                            ingester.ingest_path(tmp_path, source_name=name)
-                    else:
-                        ingester.ingest_path(tmp_path, source_name=name)
-                    ingested += 1
-                except Exception:
-                    errors += 1
-                finally:
-                    tmp_path.unlink(missing_ok=True)
-    finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
-        db.close()
-
-    summary = {
-        "mailbox": mailbox,
-        "inspected_messages": inspected,
-        "attachments_seen": attachments_seen,
-        "ingested": ingested,
-        "skipped": skipped,
-        "errors": errors,
-        "dry_run": dry_run,
-    }
-    if as_json:
-        _emit_json(summary)
-        return
-    mode = "Dry run complete" if dry_run else "IMAP ingestion complete"
-    console.print(
-        f"[green]{mode}[/green] inspected={inspected} attachments={attachments_seen} "
-        f"ingested={ingested} skipped={skipped} errors={errors}"
+    run_connectors_imap(
+        host=host,
+        username=username,
+        password=password,
+        mailbox=mailbox,
+        unseen=unseen,
+        limit=limit,
+        dry_run=dry_run,
+        as_json=as_json,
     )
 
 
