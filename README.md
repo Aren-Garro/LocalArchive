@@ -89,6 +89,7 @@ python -m localarchive.cli process
 
 # Process in parallel with batched DB commits
 python -m localarchive.cli process --workers 4 --commit-batch-size 20
+python -m localarchive.cli process --ocr-languages en,es
 
 # Dry-run / resume controls for robust long runs
 python -m localarchive.cli process --dry-run

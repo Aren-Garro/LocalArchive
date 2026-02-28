@@ -988,3 +988,49 @@ def test_process_json_summary(monkeypatch):
     assert '"run_id"' in run.output
     assert '"status": "completed"' in run.output
     assert '"resumed_from_run": null' in run.output
+    assert '"ocr_languages": [' in run.output
+
+
+def test_process_ocr_languages_override(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-process-ocr-lang")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    fake_ocr_module = types.SimpleNamespace(
+        get_ocr_engine=lambda _cfg: _FakeOCR(),
+        pdf_to_images=lambda _path, tmp_dir=None: [],
+        extract_text_from_pdf_native=lambda _path: "",
+    )
+    monkeypatch.setitem(sys.modules, "localarchive.core.ocr_engine", fake_ocr_module)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "doc.png"
+    source.write_bytes(b"x")
+    db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="process-ocr-lang-1",
+        file_type="png",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="pending_ocr",
+    )
+    db.close()
+
+    runner = CliRunner()
+    run = runner.invoke(main, ["process", "--json", "--workers", "1", "--ocr-languages", "en,es"])
+    assert run.exit_code == 0
+    assert '"ocr_languages": [' in run.output
+    assert '"en"' in run.output
+    assert '"es"' in run.output
+
+
+def test_process_ocr_languages_validation(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-process-ocr-invalid")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    runner = CliRunner()
+    bad = runner.invoke(main, ["process", "--ocr-languages", "en,*", "--dry-run"])
+    assert bad.exit_code == 2
+    assert "Invalid OCR language code" in bad.output

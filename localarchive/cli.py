@@ -120,6 +120,23 @@ def _validate_threshold(name: str, value: float) -> None:
         raise CLIError(f"{name} must be between 0 and 1.", exit_code=2)
 
 
+def _parse_ocr_languages(raw: str | None, fallback: list[str]) -> list[str]:
+    if raw is None:
+        langs = [str(x).strip().lower() for x in fallback if str(x).strip()]
+        return langs or ["en"]
+    parts = [p.strip().lower() for p in raw.split(",")]
+    langs = [p for p in parts if p]
+    if not langs:
+        raise CLIError("`--ocr-languages` must include at least one language code.", exit_code=2)
+    for code in langs:
+        if not all(ch.isalnum() or ch in {"-", "_"} for ch in code):
+            raise CLIError(
+                f"Invalid OCR language code: {code}. Use comma-separated tokens like `en,es,de`.",
+                exit_code=2,
+            )
+    return langs
+
+
 def _emit_json(payload: dict | list) -> None:
     click.echo(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
 
@@ -506,6 +523,11 @@ def tag(doc_id: int, tags: tuple[str]):
 @click.option(
     "--from-run", type=int, default=None, help="Resume from a specific processing run ID."
 )
+@click.option(
+    "--ocr-languages",
+    default=None,
+    help="Comma-separated OCR language codes for this run (overrides config.ocr.languages).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit process run summary as JSON.")
 def process(
     limit: int | None,
@@ -517,6 +539,7 @@ def process(
     max_errors: int | None,
     resume: bool,
     from_run: int | None,
+    ocr_languages: str | None,
     as_json: bool,
 ):
     """Run OCR and field extraction on pending documents."""
@@ -546,6 +569,8 @@ def process(
         max_errors if max_errors is not None else config.processing.max_errors_per_run
     )
     _validate_limit(max_error_budget)
+    resolved_ocr_languages = _parse_ocr_languages(ocr_languages, config.ocr.languages)
+    config.ocr.languages = resolved_ocr_languages
     db = get_db(config)
     _run_integrity_check_if_enabled(config, db, "process")
     resume_run = None
@@ -576,6 +601,7 @@ def process(
                     "processed": 0,
                     "errors": 0,
                     "aborted_reason": "",
+                    "ocr_languages": resolved_ocr_languages,
                     "checkpoint_doc_id": after_doc_id,
                     "total_candidates": 0,
                 }
@@ -593,6 +619,7 @@ def process(
                     "dry_run": True,
                     "count": len(doc_ids),
                     "doc_ids": doc_ids,
+                    "ocr_languages": resolved_ocr_languages,
                     "resumed_from_run": int(resume_run.get("id")) if resume_run else None,
                     "start_after_doc_id": after_doc_id,
                 }
@@ -605,6 +632,12 @@ def process(
         return
     mode = extractor_mode or config.extraction.strategy
     run_id = db.start_processing_run(engine=config.ocr.engine, extractor=mode)
+    db.add_processing_event(
+        run_id,
+        document_id=None,
+        event_type="config",
+        message=f"ocr_languages={','.join(resolved_ocr_languages)}",
+    )
     processed_count = 0
     error_count = 0
     completed_count = 0
@@ -801,6 +834,7 @@ def process(
                 "processed": processed_count,
                 "errors": error_count,
                 "aborted_reason": aborted_reason,
+                "ocr_languages": resolved_ocr_languages,
                 "checkpoint_doc_id": int(run_meta.get("checkpoint_doc_id", 0) or 0),
                 "total_candidates": len(pending),
                 "resumed_from_run": int(resume_run.get("id")) if resume_run else None,
