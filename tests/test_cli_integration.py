@@ -279,6 +279,40 @@ def test_backup_create_json_summary(monkeypatch):
     assert payload["pruned_count"] >= 1
 
 
+def test_backup_create_dry_run_json_no_side_effects(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-backup-create-dry-run")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.reliability.backup_retention_count = 1
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    config.archive_dir.mkdir(parents=True, exist_ok=True)
+    (config.archive_dir / "doc.txt").write_text("hello")
+    db = Database(config.db_path)
+    db.initialize()
+    existing_backup = tmp_path / "existing.zip"
+    with zipfile.ZipFile(existing_backup, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("archive.db", "x")
+    db.record_backup(path=str(existing_backup), db_hash="", archive_file_count=0, verified=False)
+    db.close()
+
+    target = tmp_path / "dry-run.zip"
+    runner = CliRunner()
+    result = runner.invoke(main, ["backup", "create", "--path", str(target), "--dry-run", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["dry_run"] is True
+    assert payload["path"].endswith("dry-run.zip")
+    assert payload["archive_file_count"] >= 1
+    assert payload["would_prune_count"] >= 1
+    assert target.exists() is False
+
+    verify_db = Database(config.db_path)
+    rows = verify_db.list_backups(limit=10)
+    verify_db.close()
+    assert len(rows) == 1
+    assert rows[0]["path"].endswith("existing.zip")
+
+
 def test_backup_list_prune_missing(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-backup-prune")
     config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")

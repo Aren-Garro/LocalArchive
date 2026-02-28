@@ -1053,17 +1053,46 @@ def backup_list(limit: int, as_json: bool, prune_missing: bool, missing_only: bo
 @backup.command("create")
 @click.option("--path", "backup_path", type=click.Path(dir_okay=False, path_type=Path), required=True)
 @click.option("--json", "as_json", is_flag=True, help="Emit backup summary as JSON.")
-def backup_create(backup_path: Path, as_json: bool):
+@click.option("--dry-run", is_flag=True, help="Show backup summary without writing files or DB records.")
+def backup_create(backup_path: Path, as_json: bool, dry_run: bool):
     """Create a backup archive including DB and config."""
     config = get_config()
     config.ensure_dirs()
-    backup_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
+    archive_file_count = 0
+    if config.archive_dir.exists():
+        for p in config.archive_dir.rglob("*"):
+            if p.is_file():
+                archive_file_count += 1
+    db = get_db(config)
+    existing_backups = db.list_backups(limit=1000000)
+    keep = max(1, config.reliability.backup_retention_count)
+    would_prune_count = max(0, (len(existing_backups) + 1) - keep)
+    db.close()
+    if dry_run:
+        payload = {
+            "dry_run": True,
+            "path": str(backup_path),
+            "archive_file_count": int(archive_file_count),
+            "includes_database": bool(config.db_path.exists()),
+            "includes_config": bool(cfg_path.exists()),
+            "would_prune_count": int(would_prune_count),
+        }
+        if as_json:
+            _emit_json(payload)
+            return
+        console.print("[bold]Backup Dry Run[/bold]")
+        console.print(f"Path: {payload['path']}")
+        console.print(f"Includes DB: {'yes' if payload['includes_database'] else 'no'}")
+        console.print(f"Includes config: {'yes' if payload['includes_config'] else 'no'}")
+        console.print(f"Archive files: {payload['archive_file_count']}")
+        console.print(f"Would prune old backups: {payload['would_prune_count']}")
+        return
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path = config.runtime.tmp_dir / f"archive-snapshot-{uuid4().hex}.db"
     if config.db_path.exists():
         with sqlite3.connect(str(config.db_path)) as src, sqlite3.connect(str(snapshot_path)) as dst:
             src.backup(dst)
-    archive_file_count = 0
     with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         if snapshot_path.exists():
             zf.write(snapshot_path, arcname="archive.db")
@@ -1085,7 +1114,6 @@ def backup_create(backup_path: Path, as_json: bool):
     db = get_db(config)
     db.record_backup(str(backup_path), db_hash=db_hash, archive_file_count=archive_file_count, verified=verified)
     backups = db.list_backups(limit=1000)
-    keep = max(1, config.reliability.backup_retention_count)
     pruned_count = 0
     for old in backups[keep:]:
         old_path = Path(old["path"])

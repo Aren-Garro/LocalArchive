@@ -148,6 +148,7 @@ python -m localarchive.cli verify --full --json
 # Local backup / restore
 python -m localarchive.cli backup create --path localarchive-backup.zip
 python -m localarchive.cli backup create --path localarchive-backup.zip --json
+python -m localarchive.cli backup create --path localarchive-backup.zip --dry-run --json
 python -m localarchive.cli backup list
 python -m localarchive.cli backup list --missing-only
 python -m localarchive.cli backup list --json --prune-missing
