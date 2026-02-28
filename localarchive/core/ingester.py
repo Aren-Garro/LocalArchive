@@ -62,9 +62,24 @@ class Ingester:
         doc_ids = []
         supported = sorted(f for f in dirpath.rglob("*") if f.is_file() and is_supported(f))
         console.print(f"Found [bold]{len(supported)}[/bold] supported files in {dirpath}")
-        for filepath in supported:
-            doc_ids.extend(self._ingest_file(filepath))
+        doc_ids.extend(self.ingest_files(supported))
         console.print(f"[green]Ingested {len(doc_ids)} new documents.[/green]")
+        return doc_ids
+
+    def ingest_files(self, files: list[Path], scan_cache: dict[str, tuple[int, int]] | None = None) -> list[int]:
+        doc_ids = []
+        for filepath in files:
+            if scan_cache is not None:
+                try:
+                    stat = filepath.stat()
+                except OSError:
+                    continue
+                key = str(filepath.resolve())
+                signature = (int(stat.st_size), int(stat.st_mtime_ns))
+                if scan_cache.get(key) == signature:
+                    continue
+                scan_cache[key] = signature
+            doc_ids.extend(self._ingest_file(filepath))
         return doc_ids
 
 
@@ -73,6 +88,7 @@ def watch_directory(
     path: Path,
     interval_seconds: int = 5,
     run_once: bool = False,
+    fast_scan: bool = True,
 ) -> int:
     """
     Poll directory for supported files and ingest any new files.
@@ -84,10 +100,12 @@ def watch_directory(
         return 0
 
     total_ingested = 0
+    scan_cache: dict[str, tuple[int, int]] | None = {} if fast_scan else None
     console.print(f"[bold]Watching[/bold] {watch_path} every {interval_seconds}s (Ctrl+C to stop)")
     try:
         while True:
-            ingested = ingester.ingest_path(watch_path)
+            supported = sorted(f for f in watch_path.rglob("*") if f.is_file() and is_supported(f))
+            ingested = ingester.ingest_files(supported, scan_cache=scan_cache)
             total_ingested += len(ingested)
             if run_once:
                 break

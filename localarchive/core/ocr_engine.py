@@ -72,7 +72,7 @@ def get_ocr_engine(config: OCRConfig) -> BaseOCR:
     return PaddleOCREngine(config)
 
 
-def pdf_to_images(pdf_path: Path, dpi: int = 200) -> list[Path]:
+def pdf_to_images(pdf_path: Path, dpi: int = 200, tmp_dir: Path | None = None) -> list[Path]:
     """Convert each page of a PDF to a temporary PNG image."""
     import tempfile
     try:
@@ -81,11 +81,20 @@ def pdf_to_images(pdf_path: Path, dpi: int = 200) -> list[Path]:
         raise RuntimeError("PyMuPDF is required for PDF image conversion. Install `pymupdf`.") from exc
     doc = fitz.open(str(pdf_path))
     image_paths = []
+    temp_root = tmp_dir if tmp_dir else None
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
         mat = fitz.Matrix(dpi / 72, dpi / 72)
         pix = page.get_pixmap(matrix=mat)
-        tmp = Path(tempfile.mktemp(suffix=f"_p{page_num}.png"))
+        tmp_handle = tempfile.NamedTemporaryFile(
+            mode="wb",
+            suffix=f"_p{page_num}.png",
+            prefix="la-ocr-",
+            dir=str(temp_root) if temp_root else None,
+            delete=False,
+        )
+        tmp_handle.close()
+        tmp = Path(tmp_handle.name)
         pix.save(str(tmp))
         image_paths.append(tmp)
     doc.close()

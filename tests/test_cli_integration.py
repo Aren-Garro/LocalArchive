@@ -4,6 +4,7 @@ import uuid
 import types
 import sys
 import zipfile
+import tempfile
 from pathlib import Path
 from click.testing import CliRunner
 
@@ -263,3 +264,106 @@ def test_search_semantic_weight_validation(monkeypatch):
     runner = CliRunner()
     result = runner.invoke(main, ["search", "graph", "--semantic", "--bm25-weight", "-1"])
     assert result.exit_code == 2
+
+
+def test_process_parallel_workers_and_checkpoint(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-process-parallel")
+    archive_dir = tmp_path / "archive"
+    db_path = tmp_path / "archive.db"
+    config = Config(archive_dir=archive_dir, db_path=db_path)
+    config.runtime.max_workers = 4
+    config.reliability.checkpoint_batch_size = 1
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    fake_ocr_module = types.SimpleNamespace(
+        get_ocr_engine=lambda _cfg: _FakeOCR(),
+        pdf_to_images=lambda _path, tmp_dir=None: [],
+        extract_text_from_pdf_native=lambda _path: "",
+    )
+    monkeypatch.setitem(sys.modules, "localarchive.core.ocr_engine", fake_ocr_module)
+
+    db = Database(db_path)
+    db.initialize()
+    for i in range(3):
+        source = tmp_path / f"doc-{i}.png"
+        source.write_bytes(b"fake-png-content")
+        db.insert_document(
+            filename=source.name,
+            filepath=str(source),
+            file_hash=f"hash-{i}",
+            file_type="png",
+            file_size=source.stat().st_size,
+            ingested_at="2026-01-01T00:00:00Z",
+            status="pending_ocr",
+        )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["process", "--workers", "3", "--checkpoint-every", "1", "--extractor", "regex"])
+    assert result.exit_code == 0
+    assert "Progress checkpoint" in result.output
+
+    db = Database(db_path)
+    db.initialize()
+    docs = db.list_documents(status="processed", limit=10)
+    db.close()
+    assert len(docs) == 3
+
+
+def test_process_failure_tracks_retries_and_cleans_temp_files(monkeypatch):
+    class _FailingOCR:
+        def extract_text(self, image_path: Path) -> list[dict]:
+            raise RuntimeError("forced ocr failure")
+
+    tmp_path = _workspace_tmp_dir("localarchive-process-failure")
+    archive_dir = tmp_path / "archive"
+    db_path = tmp_path / "archive.db"
+    config = Config(archive_dir=archive_dir, db_path=db_path)
+    config.reliability.max_retries = 1
+    config.runtime.tmp_dir = tmp_path / "tmp"
+    config.runtime.tmp_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    temp_images: list[Path] = []
+
+    def _fake_pdf_to_images(_path: Path, tmp_dir: Path | None = None) -> list[Path]:
+        root = tmp_dir or tmp_path
+        image = Path(tempfile.NamedTemporaryFile(delete=False, suffix=".png", dir=str(root)).name)
+        image.write_bytes(b"png")
+        temp_images.append(image)
+        return [image]
+
+    fake_ocr_module = types.SimpleNamespace(
+        get_ocr_engine=lambda _cfg: _FailingOCR(),
+        pdf_to_images=_fake_pdf_to_images,
+        extract_text_from_pdf_native=lambda _path: "",
+    )
+    monkeypatch.setitem(sys.modules, "localarchive.core.ocr_engine", fake_ocr_module)
+
+    db = Database(db_path)
+    db.initialize()
+    broken_pdf = tmp_path / "broken.pdf"
+    broken_pdf.write_bytes(b"%PDF-1.4 broken")
+    doc_id = db.insert_document(
+        filename=broken_pdf.name,
+        filepath=str(broken_pdf),
+        file_hash="broken-pdf-hash",
+        file_type="pdf",
+        file_size=broken_pdf.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="pending_ocr",
+    )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["process", "--workers", "2"])
+    assert result.exit_code == 0
+    assert "retries" in result.output and "exceeded" in result.output
+
+    db = Database(db_path)
+    db.initialize()
+    doc = db.get_document(doc_id)
+    db.close()
+    assert doc["status"] == "error"
+    assert doc["processing_attempts"] == 1
+    assert "max_retries_exceeded" in doc["error_message"]
+    assert temp_images and all(not p.exists() for p in temp_images)

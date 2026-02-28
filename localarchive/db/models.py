@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS documents (
     ocr_text        TEXT DEFAULT '',
     page_count      INTEGER DEFAULT 0,
     error_message   TEXT DEFAULT '',
-    last_processed_at TEXT DEFAULT ''
+    last_processed_at TEXT DEFAULT '',
+    processing_attempts INTEGER NOT NULL DEFAULT 0,
+    last_error_at   TEXT DEFAULT ''
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
@@ -142,6 +144,8 @@ class Document:
     page_count: int = 0
     error_message: str = ""
     last_processed_at: str = ""
+    processing_attempts: int = 0
+    last_error_at: str = ""
     tags: list[str] = field(default_factory=list)
 
 

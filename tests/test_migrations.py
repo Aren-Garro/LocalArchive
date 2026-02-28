@@ -55,3 +55,5 @@ def test_initialize_migrates_old_schema():
     assert "updated_at" in col_names
     assert "error_message" in col_names
     assert "last_processed_at" in col_names
+    assert "processing_attempts" in col_names
+    assert "last_error_at" in col_names

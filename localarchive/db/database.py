@@ -6,7 +6,7 @@ from collections import defaultdict
 from localarchive.db.models import SCHEMA_SQL
 from localarchive.utils import timestamp_now, file_hash
 
-LATEST_SCHEMA_VERSION = 3
+LATEST_SCHEMA_VERSION = 4
 
 
 class Database:
@@ -113,6 +113,15 @@ class Database:
             )
             self._set_schema_version(3)
 
+        if version < 4:
+            if not self._has_column("documents", "processing_attempts"):
+                self.conn.execute("ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0")
+            if not self._has_column("documents", "last_error_at"):
+                self.conn.execute("ALTER TABLE documents ADD COLUMN last_error_at TEXT DEFAULT ''")
+            self.conn.execute("UPDATE documents SET processing_attempts = COALESCE(processing_attempts, 0)")
+            self.conn.execute("UPDATE documents SET last_error_at = '' WHERE last_error_at IS NULL")
+            self._set_schema_version(4)
+
     def close(self) -> None:
         if self._conn:
             self._conn.close()
@@ -123,6 +132,8 @@ class Database:
         kwargs.setdefault("updated_at", now)
         kwargs.setdefault("error_message", "")
         kwargs.setdefault("last_processed_at", "")
+        kwargs.setdefault("processing_attempts", 0)
+        kwargs.setdefault("last_error_at", "")
         cols = ", ".join(kwargs.keys())
         placeholders = ", ".join(["?"] * len(kwargs))
         cur = self.conn.execute(
@@ -244,7 +255,8 @@ class Database:
         placeholders = ", ".join("?" for _ in doc_ids)
         params = [timestamp_now(), *doc_ids]
         cur = self.conn.execute(
-            f"UPDATE documents SET status = 'pending_ocr', error_message = '', updated_at = ? "
+            f"UPDATE documents SET status = 'pending_ocr', error_message = '', processing_attempts = 0, "
+            f"last_error_at = '', updated_at = ? "
             f"WHERE id IN ({placeholders})",
             params,
         )
@@ -257,7 +269,7 @@ class Database:
         try:
             self.conn.execute(
                 "UPDATE documents SET ocr_text = ?, status = 'processed', error_message = '', "
-                "last_processed_at = ?, updated_at = ? WHERE id = ?",
+                "last_processed_at = ?, updated_at = ?, processing_attempts = 0, last_error_at = '' WHERE id = ?",
                 (ocr_text, now, now, doc_id),
             )
             self.replace_fields(doc_id, fields)
@@ -265,6 +277,26 @@ class Database:
         except Exception:
             self.conn.rollback()
             raise
+
+    def record_processing_error(self, doc_id: int, error_message: str, max_retries: int) -> dict:
+        row = self.conn.execute(
+            "SELECT processing_attempts FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        previous_attempts = int(row["processing_attempts"]) if row else 0
+        attempts = previous_attempts + 1
+        terminal = max_retries >= 0 and attempts >= max_retries
+        now = timestamp_now()
+        message = str(error_message)
+        if terminal:
+            message = f"{message} (max_retries_exceeded)"
+        self.conn.execute(
+            "UPDATE documents SET status = 'error', error_message = ?, processing_attempts = ?, "
+            "last_error_at = ?, updated_at = ? WHERE id = ?",
+            (message, attempts, now, now, doc_id),
+        )
+        self.conn.commit()
+        return {"attempts": attempts, "terminal": terminal, "max_retries": max_retries}
 
     def get_fields(self, doc_id: int) -> list[dict]:
         rows = self.conn.execute(

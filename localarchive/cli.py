@@ -9,6 +9,8 @@ import zipfile
 import shutil
 import sqlite3
 import tempfile
+import concurrent.futures
+import threading
 from uuid import uuid4
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -79,6 +81,20 @@ def _validate_limit(limit: int) -> None:
         raise CLIError("Limit must be >= 1.", exit_code=2)
 
 
+def _run_integrity_check_if_enabled(config: Config, db: Database, context: str) -> None:
+    if not config.reliability.integrity_check_on_startup:
+        return
+    report = db.audit_verify(repair=False)
+    if not report["issues"]:
+        console.print(f"[dim]{context}: integrity check passed ({report['checked']} docs).[/dim]")
+        return
+    sample = ", ".join(issue["issue"] for issue in report["issues"][:3])
+    console.print(
+        f"[yellow]{context}: integrity check found {len(report['issues'])} issue(s) "
+        f"across {report['checked']} docs ({sample}).[/yellow]"
+    )
+
+
 def _validate_hybrid_weights(bm25_weight: float, vector_weight: float) -> tuple[float, float]:
     if bm25_weight < 0 or vector_weight < 0:
         raise CLIError("Hybrid weights must be non-negative.", exit_code=2)
@@ -105,6 +121,7 @@ def init(rewrite_config: bool):
     else:
         config = get_config()
     db = get_db(config)
+    _run_integrity_check_if_enabled(config, db, "init")
     db.close()
     console.print("[green]LocalArchive initialized.[/green]")
     console.print(f"  Archive dir: {config.archive_dir}")
@@ -238,6 +255,13 @@ def tag(doc_id: int, tags: tuple[str]):
 
 @main.command()
 @click.option("--limit", default=None, type=int, help="Max documents to process")
+@click.option("--workers", type=int, default=None, help="Worker count (defaults to runtime.max_workers).")
+@click.option(
+    "--checkpoint-every",
+    type=int,
+    default=None,
+    help="Emit progress every N documents (defaults to reliability.checkpoint_batch_size).",
+)
 @click.option(
     "--extractor",
     "extractor_mode",
@@ -245,15 +269,19 @@ def tag(doc_id: int, tags: tuple[str]):
     default=None,
     help="Extraction strategy (defaults to config.extraction.strategy).",
 )
-def process(limit: int | None, extractor_mode: str | None):
+def process(limit: int | None, workers: int | None, checkpoint_every: int | None, extractor_mode: str | None):
     """Run OCR and field extraction on pending documents."""
     from localarchive.core.ocr_engine import get_ocr_engine, pdf_to_images, extract_text_from_pdf_native
     from localarchive.core.extractor import extract_fields
     config = get_config()
     max_docs = limit if limit is not None else config.processing.default_limit
     _validate_limit(max_docs)
+    worker_count = workers if workers is not None else config.runtime.max_workers
+    _validate_limit(worker_count)
+    checkpoint_size = checkpoint_every if checkpoint_every is not None else config.reliability.checkpoint_batch_size
+    _validate_limit(checkpoint_size)
     db = get_db(config)
-    ocr = get_ocr_engine(config.ocr)
+    _run_integrity_check_if_enabled(config, db, "process")
     pending = db.list_documents(status="pending_ocr", limit=max_docs)
     if not pending:
         console.print("[dim]No documents pending OCR.[/dim]")
@@ -263,10 +291,23 @@ def process(limit: int | None, extractor_mode: str | None):
     run_id = db.start_processing_run(engine=config.ocr.engine, extractor=mode)
     processed_count = 0
     error_count = 0
+    completed_count = 0
     console.print(f"Processing [bold]{len(pending)}[/bold] documents...\n")
-    for doc in pending:
+    if config.runtime.fail_fast and worker_count > 1:
+        console.print("[yellow]Fail-fast enabled; forcing single-worker processing for deterministic stop behavior.[/yellow]")
+        worker_count = 1
+    thread_local = threading.local()
+
+    def _get_worker_ocr():
+        engine = getattr(thread_local, "ocr_engine", None)
+        if engine is None:
+            engine = get_ocr_engine(config.ocr)
+            thread_local.ocr_engine = engine
+        return engine
+
+    def _process_document(doc: dict) -> dict:
         filepath = Path(doc["filepath"])
-        console.print(f"  -> {doc['filename']}...", end=" ")
+        temp_images: list[Path] = []
         try:
             full_text = ""
             if doc["file_type"] == "pdf":
@@ -274,31 +315,81 @@ def process(limit: int | None, extractor_mode: str | None):
                 if len(native_text.strip()) > config.processing.pdf_native_text_min_chars:
                     full_text = native_text
                 else:
-                    images = pdf_to_images(filepath)
-                    for img_path in images:
-                        entries = ocr.extract_text(img_path)
+                    temp_images = pdf_to_images(filepath, tmp_dir=config.runtime.tmp_dir)
+                    ocr_engine = _get_worker_ocr()
+                    for img_path in temp_images:
+                        entries = ocr_engine.extract_text(img_path)
                         full_text += " ".join(e["text"] for e in entries) + "\n"
-                        if config.runtime.cleanup_temp_files:
-                            img_path.unlink(missing_ok=True)
             else:
-                entries = ocr.extract_text(filepath)
+                ocr_engine = _get_worker_ocr()
+                entries = ocr_engine.extract_text(filepath)
                 full_text = " ".join(e["text"] for e in entries)
             fields = extract_fields(full_text, mode=mode, config=config.extraction)
             field_dicts = [
                 {"field_type": f.field_type, "value": f.value, "raw_match": f.raw_match, "start": f.start}
                 for f in fields
             ]
-            db.update_processed_document(doc["id"], ocr_text=full_text, fields=field_dicts)
-            db.add_processing_event(run_id, "processed", message=f"{len(fields)} fields", document_id=doc["id"])
-            processed_count += 1
-            console.print(f"[green]done[/green] ({len(fields)} fields)")
-        except Exception as e:
-            db.update_document(doc["id"], status="error", error_message=str(e))
-            db.add_processing_event(run_id, "error", message=str(e), document_id=doc["id"])
+            return {"doc_id": doc["id"], "filename": doc["filename"], "full_text": full_text, "fields": field_dicts}
+        finally:
+            if config.runtime.cleanup_temp_files:
+                for img_path in temp_images:
+                    img_path.unlink(missing_ok=True)
+
+    def _handle_result(result: dict):
+        nonlocal processed_count, error_count, completed_count
+        doc_id = result["doc_id"]
+        filename = result["filename"]
+        error = result.get("error")
+        if error:
+            retry_state = db.record_processing_error(doc_id, str(error), max_retries=config.reliability.max_retries)
+            db.add_processing_event(
+                run_id,
+                "error",
+                message=f"{error} (attempt {retry_state['attempts']}/{retry_state['max_retries']})",
+                document_id=doc_id,
+            )
             error_count += 1
-            console.print(f"[red]error: {e}[/red]")
-            if config.runtime.fail_fast:
+            if retry_state["terminal"]:
+                console.print(
+                    f"  -> {filename}... [red]error[/red]: {error} "
+                    f"(attempt {retry_state['attempts']}/{retry_state['max_retries']}, max retries exceeded)"
+                )
+            else:
+                console.print(
+                    f"  -> {filename}... [red]error[/red]: {error} "
+                    f"(attempt {retry_state['attempts']}/{retry_state['max_retries']})"
+                )
+        else:
+            db.update_processed_document(doc_id, ocr_text=result["full_text"], fields=result["fields"])
+            db.add_processing_event(run_id, "processed", message=f"{len(result['fields'])} fields", document_id=doc_id)
+            processed_count += 1
+            console.print(f"  -> {filename}... [green]done[/green] ({len(result['fields'])} fields)")
+        completed_count += 1
+        if completed_count % checkpoint_size == 0:
+            console.print(
+                f"[dim]Progress checkpoint: {completed_count}/{len(pending)} "
+                f"(processed={processed_count}, errors={error_count})[/dim]"
+            )
+
+    if worker_count == 1:
+        for doc in pending:
+            try:
+                result = _process_document(doc)
+            except Exception as e:
+                result = {"doc_id": doc["id"], "filename": doc["filename"], "error": e}
+            _handle_result(result)
+            if config.runtime.fail_fast and result.get("error"):
                 break
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {executor.submit(_process_document, doc): doc for doc in pending}
+            for future in concurrent.futures.as_completed(futures):
+                doc = futures[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    result = {"doc_id": doc["id"], "filename": doc["filename"], "error": e}
+                _handle_result(result)
     final_status = "completed" if error_count == 0 else "completed_with_errors"
     db.finish_processing_run(run_id, status=final_status, processed=processed_count, errors=error_count)
     db.close()
@@ -334,7 +425,8 @@ def reprocess(status: str, since: str | None, limit: int, dry_run: bool):
 @click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--interval", type=int, default=None, help="Polling interval in seconds.")
 @click.option("--once", is_flag=True, help="Run a single scan cycle and exit.")
-def watch(path: Path, interval: int | None, once: bool):
+@click.option("--fast-scan/--no-fast-scan", default=True, help="Skip unchanged files between scan cycles.")
+def watch(path: Path, interval: int | None, once: bool, fast_scan: bool):
     """Watch a folder and ingest newly discovered files."""
     config = get_config()
     config.ensure_dirs()
@@ -342,7 +434,13 @@ def watch(path: Path, interval: int | None, once: bool):
     ingester = Ingester(config, db)
     poll_interval = interval if interval is not None else config.watch.interval_seconds
     try:
-        total = watch_directory(ingester, path=path, interval_seconds=poll_interval, run_once=once)
+        total = watch_directory(
+            ingester,
+            path=path,
+            interval_seconds=poll_interval,
+            run_once=once,
+            fast_scan=fast_scan,
+        )
         console.print(f"[green]Watcher finished. New documents ingested: {total}[/green]")
     finally:
         db.close()
@@ -605,6 +703,9 @@ def serve(host: str, port: int):
     from localarchive.ui.app import create_app
     config = get_config()
     config.ensure_dirs()
+    startup_db = get_db(config)
+    _run_integrity_check_if_enabled(config, startup_db, "serve")
+    startup_db.close()
     h = host or config.ui.host
     p = port or config.ui.port
     console.print(f"[bold]LocalArchive UI[/bold] -> http://{h}:{p}")

@@ -156,3 +156,34 @@ def test_hybrid_search_returns_scores():
     db.close()
     assert results
     assert "hybrid_score" in results[0]
+
+
+def test_record_processing_error_and_retry_terminal():
+    db = _get_test_db()
+    doc_id = db.insert_document(
+        filename="broken.pdf",
+        filepath="/tmp/broken.pdf",
+        file_hash="retry1",
+        file_type="pdf",
+        file_size=1,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="pending_ocr",
+    )
+    state = db.record_processing_error(doc_id, "ocr failure", max_retries=2)
+    assert state["attempts"] == 1
+    assert state["terminal"] is False
+
+    state = db.record_processing_error(doc_id, "ocr failure", max_retries=2)
+    assert state["attempts"] == 2
+    assert state["terminal"] is True
+
+    doc = db.get_document(doc_id)
+    assert doc["processing_attempts"] == 2
+    assert "max_retries_exceeded" in doc["error_message"]
+
+    updated = db.mark_for_reprocess([doc_id])
+    assert updated == 1
+    doc = db.get_document(doc_id)
+    assert doc["status"] == "pending_ocr"
+    assert doc["processing_attempts"] == 0
+    db.close()
