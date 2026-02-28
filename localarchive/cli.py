@@ -1100,14 +1100,32 @@ def backup_create(backup_path: Path):
 
 
 @backup.command("restore")
-@click.option("--path", "backup_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option("--path", "backup_path", type=click.Path(dir_okay=False, path_type=Path), required=False)
+@click.option("--latest", "use_latest", is_flag=True, help="Restore from the newest tracked backup record.")
 @click.option("--dry-run", is_flag=True, help="Show what would be restored without modifying local files.")
 @click.option("--json", "as_json", is_flag=True, help="Emit restore summary as JSON.")
-def backup_restore(backup_path: Path, dry_run: bool, as_json: bool):
+def backup_restore(backup_path: Path | None, use_latest: bool, dry_run: bool, as_json: bool):
     """Restore DB and archive data from a backup archive."""
     config = get_config()
     config.ensure_dirs()
     cfg_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
+    if bool(backup_path) == bool(use_latest):
+        raise CLIError("Specify exactly one of --path or --latest.", exit_code=2)
+    if use_latest:
+        db = get_db(config)
+        rows = db.list_backups(limit=1)
+        db.close()
+        if not rows:
+            raise CLIError("No tracked backups found. Create one with `backup create` first.", exit_code=2)
+        selected = Path(str(rows[0].get("path", "")))
+        if not selected.exists():
+            raise CLIError(
+                f"Newest tracked backup is missing on disk: {selected}. Run `backup list --prune-missing` and retry.",
+                exit_code=2,
+            )
+        backup_path = selected
+    if backup_path is None or not backup_path.exists():
+        raise CLIError(f"Backup path does not exist: {backup_path}", exit_code=2)
     try:
         with zipfile.ZipFile(backup_path, "r") as zf:
             members = set(zf.namelist())

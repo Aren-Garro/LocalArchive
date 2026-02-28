@@ -313,6 +313,46 @@ def test_backup_restore_dry_run_summary(monkeypatch):
     assert config.db_path.read_text() == "old-db"
 
 
+def test_backup_restore_latest_dry_run(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-restore-latest")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    old_backup = tmp_path / "old.zip"
+    new_backup = tmp_path / "new.zip"
+    with zipfile.ZipFile(old_backup, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("archive.db", "old-db")
+    with zipfile.ZipFile(new_backup, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("archive.db", "new-db")
+    db.record_backup(path=str(old_backup), db_hash="", archive_file_count=0, verified=False)
+    db.record_backup(path=str(new_backup), db_hash="", archive_file_count=0, verified=False)
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["backup", "restore", "--latest", "--dry-run", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["dry_run"] is True
+    assert str(payload["backup"]).endswith("new.zip")
+
+
+def test_backup_restore_latest_requires_backups(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-restore-latest-empty")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["backup", "restore", "--latest"])
+    assert result.exit_code == 2
+    assert "No tracked backups found" in result.output
+
+
 def test_search_semantic_respects_config_gate(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-semantic-gate")
     config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
