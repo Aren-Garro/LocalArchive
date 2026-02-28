@@ -218,6 +218,7 @@ def _validate_csrf(request: Request, csrf_token: str) -> bool:
 def create_app(cfg: Config) -> FastAPI:
     global config, _db, search_engine
     config = cfg
+    config.ensure_dirs()
     if _db is not None:
         _db.close()
     _db = Database(cfg.db_path)

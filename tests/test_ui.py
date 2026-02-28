@@ -283,4 +283,4 @@ def test_ui_status_filter_dropdown():
     client = TestClient(app)
     res = client.get("/", params={"status": "error"})
     assert res.status_code == 200
-    assert 'selected">error</option>' in res.text
+    assert 'value="error" selected>error</option>' in res.text
