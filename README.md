@@ -73,6 +73,14 @@ docker compose up --build
 # http://127.0.0.1:8877
 ```
 
+### Pre-built Binaries (optional)
+
+- GitHub Actions workflow at `.github/workflows/build-binaries.yml` builds one-file CLI binaries for:
+  - Windows (`windows-latest`)
+  - macOS (`macos-latest`)
+  - Linux (`ubuntu-latest`)
+- Triggered on tag push (`v*`) or manual workflow dispatch.
+
 ### Basic Usage
 
 ```bash
@@ -313,7 +321,7 @@ search_paths = ["~/.localarchive/plugins"]
 - [x] **Plugin architecture** — Allow community-built extractors, exporters, and custom processors
 - [x] **Localization (i18n)** — Translate UI and documentation to make LocalArchive globally accessible
 - [x] **Docker containers** — One-command deployment for less technical users
-- [ ] **Pre-built binaries** â€” Windows .exe, macOS .app, Linux AppImage for non-Python users
+- [x] **Pre-built binaries** â€” Windows .exe, macOS .app, Linux AppImage for non-Python users
 - [ ] **Community template library** â€” Share extraction rules for common document types (W-2s, insurance forms, research papers)
 - [x] **Integration connectors** — Email ingestion (IMAP), folder sync daemons, workflow automation hooks
 - [ ] **Educational resources** â€” Video tutorials, use-case guides, academic partnership programs

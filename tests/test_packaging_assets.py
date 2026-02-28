@@ -17,3 +17,16 @@ def test_docker_assets_present():
     assert '"localarchive.cli"' in d
     assert '"serve"' in d
     assert "8877:8877" in c
+
+
+def test_binary_packaging_assets_present():
+    root = Path.cwd()
+    spec = root / "localarchive.spec"
+    workflow = root / ".github" / "workflows" / "build-binaries.yml"
+    assert spec.exists()
+    assert workflow.exists()
+
+    s = spec.read_text(encoding="utf-8")
+    w = workflow.read_text(encoding="utf-8")
+    assert 'name="localarchive"' in s
+    assert "pyinstaller localarchive.spec --clean" in w
