@@ -314,6 +314,11 @@ def test_search_no_results_shows_hint(monkeypatch):
     assert "No results found." in result.output
     assert "Hint: try `localarchive search" in result.output
 
+    as_json = runner.invoke(main, ["search", "nothinghere", "--json"])
+    assert as_json.exit_code == 0
+    assert '"count": 0' in as_json.output
+    assert '"results": []' in as_json.output
+
 
 def test_process_parallel_workers_and_checkpoint(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-process-parallel")
@@ -372,6 +377,11 @@ def test_process_empty_queue_shows_hint(monkeypatch):
     assert result.exit_code == 0
     assert "No documents pending OCR" in result.output
     assert "Hint: run `localarchive ingest" in result.output
+
+    as_json = runner.invoke(main, ["process", "--json"])
+    assert as_json.exit_code == 0
+    assert '"status": "noop"' in as_json.output
+    assert '"total_candidates": 0' in as_json.output
 
 
 def test_process_failure_tracks_retries_and_cleans_temp_files(monkeypatch):

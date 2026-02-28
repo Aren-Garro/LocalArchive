@@ -283,8 +283,19 @@ def search(
     if fuzzy_enabled:
         console.print(f"[dim]Fuzzy search enabled: threshold={threshold:.2f} candidates={max_candidates}[/dim]")
     if not results:
-        console.print("[yellow]No results found.[/yellow]")
-        console.print("[dim]Hint: try `localarchive search \"<term>\" --fuzzy` or broaden filters.[/dim]")
+        if as_json:
+            _emit_json(
+                {
+                    "query": query,
+                    "count": 0,
+                    "semantic": bool(semantic and config.search.enable_semantic),
+                    "fuzzy": bool(fuzzy_enabled),
+                    "results": [],
+                }
+            )
+        else:
+            console.print("[yellow]No results found.[/yellow]")
+            console.print("[dim]Hint: try `localarchive search \"<term>\" --fuzzy` or broaden filters.[/dim]")
         db.close()
         return
     if as_json:
@@ -456,8 +467,21 @@ def process(
         console.print("[yellow]No checkpointed run found; starting from earliest pending document.[/yellow]")
     pending = db.list_documents_for_processing(limit=max_docs, after_doc_id=after_doc_id)
     if not pending:
-        console.print("[dim]No documents pending OCR for the selected scope.[/dim]")
-        console.print("[dim]Hint: run `localarchive ingest <file_or_folder>` first.[/dim]")
+        if as_json:
+            _emit_json(
+                {
+                    "run_id": None,
+                    "status": "noop",
+                    "processed": 0,
+                    "errors": 0,
+                    "aborted_reason": "",
+                    "checkpoint_doc_id": after_doc_id,
+                    "total_candidates": 0,
+                }
+            )
+        else:
+            console.print("[dim]No documents pending OCR for the selected scope.[/dim]")
+            console.print("[dim]Hint: run `localarchive ingest <file_or_folder>` first.[/dim]")
         db.close()
         return
     if dry_run:
