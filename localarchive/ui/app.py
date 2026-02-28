@@ -2,6 +2,7 @@
 
 import secrets
 import tempfile
+from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
 from urllib.parse import urlparse
@@ -15,7 +16,19 @@ from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
 from localarchive.utils import is_supported, safe_filename
 
-app = FastAPI(title="LocalArchive", docs_url=None, redoc_url=None)
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    try:
+        yield
+    finally:
+        global _db
+        if _db is not None:
+            _db.close()
+            _db = None
+
+
+app = FastAPI(title="LocalArchive", docs_url=None, redoc_url=None, lifespan=_lifespan)
 config: Config = None
 _db: Database = None
 search_engine: SearchEngine = None
@@ -225,14 +238,6 @@ def create_app(cfg: Config) -> FastAPI:
     _db.initialize()
     search_engine = SearchEngine(_db)
     return app
-
-
-@app.on_event("shutdown")
-def _shutdown_db() -> None:
-    global _db
-    if _db is not None:
-        _db.close()
-        _db = None
 
 
 def _shared_styles() -> str:
