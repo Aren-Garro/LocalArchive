@@ -224,3 +224,42 @@ def test_backup_restore_rejects_unsafe_paths(monkeypatch):
     runner = CliRunner()
     result = runner.invoke(main, ["backup", "restore", "--path", str(bad_zip)])
     assert result.exit_code == 2
+
+
+def test_search_semantic_respects_config_gate(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-semantic-gate")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.search.enable_semantic = False
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    # If hybrid path is called despite config gate, this test should fail.
+    monkeypatch.setattr("localarchive.cli.SearchEngine.search_hybrid", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not run hybrid")))
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.insert_document(
+        filename="x.pdf",
+        filepath=str(tmp_path / "x.pdf"),
+        file_hash="xhash",
+        file_type="pdf",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="graph neural networks",
+    )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["search", "graph", "--semantic"])
+    assert result.exit_code == 0
+    assert "Semantic search is disabled" in result.output
+
+
+def test_search_semantic_weight_validation(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-semantic-weights")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.search.enable_semantic = True
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["search", "graph", "--semantic", "--bm25-weight", "-1"])
+    assert result.exit_code == 2

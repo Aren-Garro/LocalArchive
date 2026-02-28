@@ -79,6 +79,16 @@ def _validate_limit(limit: int) -> None:
         raise CLIError("Limit must be >= 1.", exit_code=2)
 
 
+def _validate_hybrid_weights(bm25_weight: float, vector_weight: float) -> tuple[float, float]:
+    if bm25_weight < 0 or vector_weight < 0:
+        raise CLIError("Hybrid weights must be non-negative.", exit_code=2)
+    total = bm25_weight + vector_weight
+    if total <= 0:
+        raise CLIError("At least one hybrid weight must be > 0.", exit_code=2)
+    # Normalize to avoid user surprise for arbitrary scales.
+    return bm25_weight / total, vector_weight / total
+
+
 @main.command()
 @click.option("--rewrite-config", is_flag=True, help="Overwrite config file with defaults.")
 def init(rewrite_config: bool):
@@ -148,6 +158,8 @@ def search(
     db = get_db(config)
     engine = SearchEngine(db)
     if semantic:
+        bm25_weight, vector_weight = _validate_hybrid_weights(bm25_weight, vector_weight)
+    if semantic and config.search.enable_semantic:
         results = engine.search_hybrid(
             query,
             limit=max_results,
@@ -495,50 +507,90 @@ def backup_restore(backup_path: Path):
     config.ensure_dirs()
     cfg_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
     staging_dir = Path(tempfile.mkdtemp(prefix="restore-", dir=str(config.runtime.tmp_dir)))
-    with zipfile.ZipFile(backup_path, "r") as zf:
-        members = set(zf.namelist())
-        for name in members:
-            posix = PurePosixPath(name)
-            if posix.is_absolute() or ".." in posix.parts:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-                raise CLIError(f"Unsafe backup entry path: {name}", exit_code=2)
-        if "archive.db" in members:
-            with zf.open("archive.db", "r") as src, open(staging_dir / "archive.db", "wb") as out:
-                out.write(src.read())
-        if "config.toml" in members:
-            with zf.open("config.toml", "r") as src, open(staging_dir / "config.toml", "wb") as out:
-                out.write(src.read())
-        for name in members:
-            if name.startswith("archive_data/"):
+    rollback_dir = Path(tempfile.mkdtemp(prefix="rollback-", dir=str(config.runtime.tmp_dir)))
+    moved_pairs: list[tuple[Path, Path]] = []
+    created_paths: list[Path] = []
+    try:
+        with zipfile.ZipFile(backup_path, "r") as zf:
+            members = set(zf.namelist())
+            for name in members:
+                posix = PurePosixPath(name)
+                if posix.is_absolute() or ".." in posix.parts:
+                    raise CLIError(f"Unsafe backup entry path: {name}", exit_code=2)
+            if "archive.db" in members:
+                with zf.open("archive.db", "r") as src, open(staging_dir / "archive.db", "wb") as out:
+                    out.write(src.read())
+            if "config.toml" in members:
+                with zf.open("config.toml", "r") as src, open(staging_dir / "config.toml", "wb") as out:
+                    out.write(src.read())
+            for name in members:
+                if not name.startswith("archive_data/") or name.endswith("/"):
+                    continue
                 rel = Path(*PurePosixPath(name).parts[1:])
                 staged = staging_dir / "archive_data" / rel
                 staged.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(name, "r") as src, open(staged, "wb") as out:
                     out.write(src.read())
 
-    staged_db = staging_dir / "archive.db"
-    if staged_db.exists():
-        config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        if config.db_path.exists():
-            config.db_path.unlink()
-        shutil.move(str(staged_db), str(config.db_path))
-    staged_cfg = staging_dir / "config.toml"
-    if staged_cfg.exists():
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        if cfg_path.exists():
-            cfg_path.unlink()
-        shutil.move(str(staged_cfg), str(cfg_path))
-    staged_archive_root = staging_dir / "archive_data"
-    if staged_archive_root.exists():
-        for staged in staged_archive_root.rglob("*"):
-            if not staged.is_file():
-                continue
-            rel = staged.relative_to(staged_archive_root)
-            dest = config.archive_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(staged), str(dest))
-    shutil.rmtree(staging_dir, ignore_errors=True)
-    console.print(f"[green]Backup restored from:[/green] {backup_path}")
+        staged_db = staging_dir / "archive.db"
+        if staged_db.exists():
+            config.db_path.parent.mkdir(parents=True, exist_ok=True)
+            if config.db_path.exists():
+                backup_existing = rollback_dir / "archive.db.old"
+                shutil.move(str(config.db_path), str(backup_existing))
+                moved_pairs.append((backup_existing, config.db_path))
+            shutil.move(str(staged_db), str(config.db_path))
+
+        staged_cfg = staging_dir / "config.toml"
+        if staged_cfg.exists():
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            if cfg_path.exists():
+                backup_existing = rollback_dir / "config.toml.old"
+                shutil.move(str(cfg_path), str(backup_existing))
+                moved_pairs.append((backup_existing, cfg_path))
+            shutil.move(str(staged_cfg), str(cfg_path))
+
+        staged_archive_root = staging_dir / "archive_data"
+        if staged_archive_root.exists():
+            for staged in staged_archive_root.rglob("*"):
+                if not staged.is_file():
+                    continue
+                rel = staged.relative_to(staged_archive_root)
+                dest = config.archive_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.exists():
+                    backup_existing = rollback_dir / "archive_data" / rel
+                    backup_existing.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(dest), str(backup_existing))
+                    moved_pairs.append((backup_existing, dest))
+                else:
+                    created_paths.append(dest)
+                shutil.move(str(staged), str(dest))
+
+        console.print(f"[green]Backup restored from:[/green] {backup_path}")
+    except Exception as exc:
+        for created in created_paths:
+            try:
+                if created.exists():
+                    created.unlink()
+            except Exception:
+                pass
+        for src, dest in reversed(moved_pairs):
+            try:
+                if src.exists():
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if dest.exists():
+                        if dest.is_file():
+                            dest.unlink()
+                    shutil.move(str(src), str(dest))
+            except Exception:
+                pass
+        if isinstance(exc, CLIError):
+            raise
+        raise CLIError(f"Backup restore failed: {exc}", exit_code=4) from exc
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        shutil.rmtree(rollback_dir, ignore_errors=True)
 
 
 @main.command()
