@@ -716,6 +716,64 @@ def test_classify_tags_processed_documents(monkeypatch):
     assert "invoice" in tags
 
 
+def test_classify_train_evaluate_and_ml_mode(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-classify-ml")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.autopilot.classification_model = "ml"
+    config.autopilot.min_training_samples = 2
+    config.autopilot.model_path = tmp_path / "classifier.json"
+    config.autopilot.confidence_threshold = 0.2
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    dataset = tmp_path / "train.csv"
+    dataset.write_text(
+        "text,label\n"
+        "invoice balance amount due,invoice\n"
+        "patient clinic diagnosis,medical\n",
+        encoding="utf-8",
+    )
+
+    db = Database(config.db_path)
+    db.initialize()
+    doc_id = db.insert_document(
+        filename="ml-invoice.pdf",
+        filepath=str(tmp_path / "ml-invoice.pdf"),
+        file_hash="classify-ml-1",
+        file_type="pdf",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="invoice amount due balance",
+    )
+    db.close()
+
+    runner = CliRunner()
+    train = runner.invoke(
+        main,
+        ["classify-train", "--dataset", str(dataset), "--format", "csv", "--json"],
+    )
+    assert train.exit_code == 0
+    assert '"trained": true' in train.output
+
+    evaluate = runner.invoke(
+        main,
+        ["classify-evaluate", "--dataset", str(dataset), "--format", "csv", "--json"],
+    )
+    assert evaluate.exit_code == 0
+    assert '"accuracy"' in evaluate.output
+
+    run = runner.invoke(main, ["classify", "--limit", "10"])
+    assert run.exit_code == 0
+    assert "Model:" in run.output
+    assert "ml" in run.output
+
+    db = Database(config.db_path)
+    db.initialize()
+    tags = db.get_tags(doc_id)
+    db.close()
+    assert "invoice" in tags
+
+
 def test_process_dry_run_and_max_errors(monkeypatch):
     class _FailingOCR:
         def extract_text(self, image_path: Path) -> list[dict]:

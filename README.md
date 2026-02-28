@@ -129,6 +129,8 @@ python -m localarchive.cli tag DOC_ID "medical" "2024"
 # Auto-classify processed docs and apply category tags
 python -m localarchive.cli classify --limit 500
 python -m localarchive.cli classify --limit 200 --explain
+python -m localarchive.cli classify-train --dataset training.csv --format csv --json
+python -m localarchive.cli classify-evaluate --dataset validation.csv --format csv --json
 
 # Launch web UI (optional)
 python -m localarchive.cli serve
@@ -238,9 +240,11 @@ entity_priority = ["author", "topic", "journal"]
 
 [autopilot]
 enabled = true
-classification_model = "rules"
+classification_model = "rules"  # rules | ml
 confidence_threshold = 0.65
 auto_tag = true
+model_path = "~/.localarchive/models/classifier_nb.json"
+min_training_samples = 20
 
 [search]
 enable_semantic = false

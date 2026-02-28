@@ -71,6 +71,8 @@ class AutopilotConfig:
     classification_model: str = "rules"
     confidence_threshold: float = 0.65
     auto_tag: bool = True
+    model_path: Path = Path.home() / ".localarchive" / "models" / "classifier_nb.json"
+    min_training_samples: int = 20
 
 
 @dataclass
@@ -242,6 +244,16 @@ class Config:
                         )
                     ),
                     auto_tag=bool(autopilot_data.get("auto_tag", config.autopilot.auto_tag)),
+                    model_path=Path(
+                        os.path.expanduser(
+                            autopilot_data.get("model_path", str(config.autopilot.model_path))
+                        )
+                    ),
+                    min_training_samples=int(
+                        autopilot_data.get(
+                            "min_training_samples", config.autopilot.min_training_samples
+                        )
+                    ),
                 )
             search_data = data.get("search", {})
             if search_data:
@@ -353,6 +365,10 @@ class Config:
             raise ValueError("ui.show_preview_chars must be >= 20")
         if not 0 <= self.autopilot.confidence_threshold <= 1:
             raise ValueError("autopilot.confidence_threshold must be between 0 and 1")
+        if self.autopilot.classification_model not in {"rules", "ml"}:
+            raise ValueError("autopilot.classification_model must be one of: rules, ml")
+        if self.autopilot.min_training_samples < 1:
+            raise ValueError("autopilot.min_training_samples must be >= 1")
         if self.search.snippet_chars < 50:
             raise ValueError("search.snippet_chars must be >= 50")
         if not 0 <= self.search.fuzzy_threshold <= 1:
@@ -419,6 +435,8 @@ class Config:
                 "classification_model": self.autopilot.classification_model,
                 "confidence_threshold": self.autopilot.confidence_threshold,
                 "auto_tag": self.autopilot.auto_tag,
+                "model_path": str(self.autopilot.model_path),
+                "min_training_samples": self.autopilot.min_training_samples,
             },
             "search": {
                 "enable_semantic": self.search.enable_semantic,

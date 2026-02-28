@@ -235,6 +235,16 @@ def _classify_document(doc: dict, fields: list[dict]) -> tuple[str, float, list[
     return best_label, round(confidence, 2), reasons[:4]
 
 
+def _classify_document_ml(doc: dict, model: dict) -> tuple[str, float, list[str]]:
+    from localarchive.core.classifier import predict
+
+    text = f"{doc.get('filename', '')} {doc.get('ocr_text', '')}"
+    pred = predict(model, text)
+    label = str(pred.get("label", "other"))
+    confidence = float(pred.get("confidence", 0.0))
+    return label, round(confidence, 2), [f"ml:{label}"]
+
+
 @main.command()
 @click.option("--rewrite-config", is_flag=True, help="Overwrite config file with defaults.")
 def init(rewrite_config: bool):
@@ -891,6 +901,19 @@ def classify(limit: int, retag: bool, explain: bool):
         return
     category_tags = {"invoice", "receipt", "medical", "research", "other"}
     threshold = config.autopilot.confidence_threshold
+    model_name = config.autopilot.classification_model
+    model = None
+    if model_name == "ml":
+        try:
+            from localarchive.core.classifier import load_model
+
+            model = load_model(config.autopilot.model_path)
+        except Exception:
+            console.print(
+                "[yellow]ML model unavailable; falling back to rules model. "
+                "Train with `localarchive classify-train`.[/yellow]"
+            )
+            model_name = "rules"
     updated = 0
     skipped = 0
     table = Table(title="Classification Results")
@@ -903,7 +926,10 @@ def classify(limit: int, retag: bool, explain: bool):
         table.add_column("Why", max_width=40)
     for doc in docs:
         fields = db.get_fields(int(doc["id"]))
-        label, confidence, reasons = _classify_document(doc, fields)
+        if model_name == "ml" and model is not None:
+            label, confidence, reasons = _classify_document_ml(doc, model)
+        else:
+            label, confidence, reasons = _classify_document(doc, fields)
         action = "skipped"
         if label != "other" and confidence >= threshold and config.autopilot.auto_tag:
             current_tags = set(db.get_tags(int(doc["id"])))
@@ -927,8 +953,101 @@ def classify(limit: int, retag: bool, explain: bool):
             row.append(", ".join(reasons) if reasons else "-")
         table.add_row(*row)
     console.print(table)
+    console.print(f"[dim]Model:[/dim] {model_name}")
     console.print(f"[green]Updated:[/green] {updated}  [dim]Skipped:[/dim] {skipped}")
     db.close()
+
+
+@main.command("classify-train")
+@click.option(
+    "--dataset",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to labeled dataset with columns/keys `text` and `label`.",
+)
+@click.option(
+    "--format",
+    "dataset_format",
+    type=click.Choice(["csv", "json"]),
+    default="csv",
+    help="Dataset format.",
+)
+@click.option(
+    "--output-model",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional model output path (defaults to config.autopilot.model_path).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit training summary as JSON.")
+def classify_train(dataset: Path, dataset_format: str, output_model: Path | None, as_json: bool):
+    """Train local ML classifier from labeled examples."""
+    from localarchive.core.classifier import load_labeled_examples, save_model, train_model
+
+    config = get_config()
+    examples = load_labeled_examples(dataset, fmt=dataset_format)
+    if len(examples) < config.autopilot.min_training_samples:
+        raise CLIError(
+            f"Need at least {config.autopilot.min_training_samples} examples to train ML classifier.",
+            exit_code=2,
+        )
+    model = train_model(examples)
+    model_path = output_model or config.autopilot.model_path
+    save_model(model, model_path)
+    payload = {
+        "trained": True,
+        "examples": len(examples),
+        "labels": model.get("labels", []),
+        "vocab_size": int(model.get("vocab_size", 0)),
+        "model_path": str(model_path),
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(
+        f"[green]Model trained:[/green] {payload['examples']} examples, "
+        f"{len(payload['labels'])} labels, vocab={payload['vocab_size']}"
+    )
+    console.print(f"[dim]Saved:[/dim] {model_path}")
+
+
+@main.command("classify-evaluate")
+@click.option(
+    "--dataset",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to labeled evaluation dataset with columns/keys `text` and `label`.",
+)
+@click.option(
+    "--format",
+    "dataset_format",
+    type=click.Choice(["csv", "json"]),
+    default="csv",
+    help="Dataset format.",
+)
+@click.option(
+    "--model",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional model path (defaults to config.autopilot.model_path).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit evaluation report as JSON.")
+def classify_evaluate(dataset: Path, dataset_format: str, model: Path | None, as_json: bool):
+    """Evaluate local ML classifier against labeled examples."""
+    from localarchive.core.classifier import evaluate, load_labeled_examples, load_model
+
+    config = get_config()
+    model_path = model or config.autopilot.model_path
+    model_data = load_model(model_path)
+    examples = load_labeled_examples(dataset, fmt=dataset_format)
+    report = evaluate(model_data, examples)
+    payload = {"model_path": str(model_path), **report}
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(
+        f"[green]Evaluation:[/green] accuracy={report['accuracy']:.3f} "
+        f"({report['correct']}/{report['total']})"
+    )
 
 
 @main.command()
