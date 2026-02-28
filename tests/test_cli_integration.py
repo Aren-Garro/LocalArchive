@@ -5,6 +5,7 @@ import types
 import sys
 import zipfile
 import tempfile
+import time
 from pathlib import Path
 from click.testing import CliRunner
 
@@ -208,6 +209,9 @@ def test_collections_timeline_backup_and_audit(monkeypatch):
     result = runner.invoke(main, ["backup", "create", "--path", str(backup_path)])
     assert result.exit_code == 0
     assert backup_path.exists()
+    result = runner.invoke(main, ["backup", "list", "--json"])
+    assert result.exit_code == 0
+    assert '"backups"' in result.output
 
     result = runner.invoke(main, ["audit"])
     assert result.exit_code in (0, 4)
@@ -501,6 +505,58 @@ def test_process_dry_run_and_max_errors(monkeypatch):
     live = runner.invoke(main, ["process", "--workers", "1", "--max-errors", "1"])
     assert live.exit_code == 0
     assert "Processing aborted" in live.output
+
+
+def test_process_checkpoint_uses_max_completed_doc_id(monkeypatch):
+    class _MixedOCR:
+        def extract_text(self, image_path: Path) -> list[dict]:
+            if image_path.name == "fail-third.png":
+                raise RuntimeError("intentional failure")
+            time.sleep(0.2)
+            return [{"text": "ok text", "confidence": 0.9, "bbox": []}]
+
+    tmp_path = _workspace_tmp_dir("localarchive-checkpoint-max")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.processing.max_errors_per_run = 1
+    config.processing.resume_checkpoint_interval = 1
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    fake_ocr_module = types.SimpleNamespace(
+        get_ocr_engine=lambda _cfg: _MixedOCR(),
+        pdf_to_images=lambda _path, tmp_dir=None: [],
+        extract_text_from_pdf_native=lambda _path: "",
+    )
+    monkeypatch.setitem(sys.modules, "localarchive.core.ocr_engine", fake_ocr_module)
+
+    db = Database(config.db_path)
+    db.initialize()
+    doc_ids = []
+    for name in ["slow-first.png", "slow-second.png", "fail-third.png"]:
+        source = tmp_path / name
+        source.write_bytes(b"x")
+        doc_ids.append(
+            db.insert_document(
+                filename=name,
+                filepath=str(source),
+                file_hash=f"hash-{name}",
+                file_type="png",
+                file_size=source.stat().st_size,
+                ingested_at="2026-01-01T00:00:00Z",
+                status="pending_ocr",
+            )
+        )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["process", "--workers", "3", "--max-errors", "1"])
+    assert result.exit_code == 0
+    assert "Processing aborted" in result.output
+
+    db = Database(config.db_path)
+    db.initialize()
+    run = db.latest_processing_run()
+    db.close()
+    assert run is not None
+    assert int(run["checkpoint_doc_id"]) == max(doc_ids)
 
 
 def test_doctor_json_output(monkeypatch):

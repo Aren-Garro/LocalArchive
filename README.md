@@ -145,6 +145,7 @@ python -m localarchive.cli verify --json
 
 # Local backup / restore
 python -m localarchive.cli backup create --path localarchive-backup.zip
+python -m localarchive.cli backup list
 python -m localarchive.cli backup restore --path localarchive-backup.zip
 
 # Document detail page

@@ -463,6 +463,7 @@ def process(
     processed_count = 0
     error_count = 0
     completed_count = 0
+    max_completed_doc_id = 0
     success_buffer: list[dict] = []
     error_buffer: list[dict] = []
     event_buffer: list[dict] = []
@@ -532,8 +533,9 @@ def process(
         last_flush_at = time.monotonic()
 
     def _handle_result(result: dict):
-        nonlocal processed_count, error_count, completed_count
+        nonlocal processed_count, error_count, completed_count, max_completed_doc_id
         doc_id = result["doc_id"]
+        max_completed_doc_id = max(max_completed_doc_id, int(doc_id))
         filename = result["filename"]
         error = result.get("error")
         if error:
@@ -579,7 +581,7 @@ def process(
             )
         _flush_buffers(force=False)
         if completed_count % checkpoint_interval == 0:
-            db.update_processing_checkpoint(run_id, checkpoint_doc_id=doc_id)
+            db.update_processing_checkpoint(run_id, checkpoint_doc_id=max_completed_doc_id)
         if error_count >= max_error_budget:
             raise RuntimeError(f"max_errors_exceeded:{max_error_budget}")
 
@@ -616,7 +618,7 @@ def process(
                     break
     _flush_buffers(force=True)
     if completed_count > 0:
-        db.update_processing_checkpoint(run_id, checkpoint_doc_id=int(pending[min(completed_count, len(pending)) - 1]["id"]))
+        db.update_processing_checkpoint(run_id, checkpoint_doc_id=max_completed_doc_id)
     if aborted_reason:
         final_status = "aborted"
     else:
@@ -917,6 +919,34 @@ def verify(full_verify: bool, as_json: bool):
 def backup():
     """Create or restore local backups."""
     pass
+
+
+@backup.command("list")
+@click.option("--limit", default=20, type=int, help="Max backups to show.")
+@click.option("--json", "as_json", is_flag=True, help="Emit backups as JSON.")
+def backup_list(limit: int, as_json: bool):
+    """List tracked backups."""
+    _validate_limit(limit)
+    config = get_config()
+    db = get_db(config)
+    rows = db.list_backups(limit=limit)
+    db.close()
+    if as_json:
+        _emit_json({"count": len(rows), "backups": rows})
+        return
+    table = Table(title="Backups")
+    table.add_column("Created", width=24)
+    table.add_column("Path", style="bold")
+    table.add_column("Files", width=8)
+    table.add_column("Verified", width=8)
+    for row in rows:
+        table.add_row(
+            str(row.get("created_at", "")),
+            str(row.get("path", "")),
+            str(row.get("archive_file_count", 0)),
+            "yes" if int(row.get("verified", 0)) else "no",
+        )
+    console.print(table)
 
 
 @backup.command("create")
