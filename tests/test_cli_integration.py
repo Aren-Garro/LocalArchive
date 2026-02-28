@@ -1,13 +1,14 @@
 """Integration tests for CLI wiring."""
 
-import uuid
-import types
+import json
 import sys
-import zipfile
 import tempfile
 import time
-import json
+import types
+import uuid
+import zipfile
 from pathlib import Path
+
 from click.testing import CliRunner
 
 from localarchive.cli import main

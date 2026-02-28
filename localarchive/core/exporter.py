@@ -3,7 +3,7 @@
 import csv
 import json
 from pathlib import Path
-from io import StringIO
+
 from rich.console import Console
 
 console = Console()

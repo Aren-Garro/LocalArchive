@@ -1,10 +1,11 @@
 """SQLite database manager for LocalArchive."""
 
 import sqlite3
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
+
 from localarchive.db.models import SCHEMA_SQL
-from localarchive.utils import timestamp_now, file_hash
+from localarchive.utils import file_hash, timestamp_now
 
 LATEST_SCHEMA_VERSION = 5
 

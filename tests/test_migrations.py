@@ -1,8 +1,8 @@
 """Tests for DB schema migration behavior."""
 
-from pathlib import Path
 import sqlite3
 import uuid
+from pathlib import Path
 
 from localarchive.db.database import Database
 

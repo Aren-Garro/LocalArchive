@@ -4,8 +4,8 @@ Reads from ~/.localarchive/config.toml, with sensible defaults.
 """
 
 import os
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
 
 try:
     import toml

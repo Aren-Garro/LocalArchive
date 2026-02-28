@@ -4,14 +4,16 @@ Handles importing documents from files or folders into the archive.
 Deduplicates by file hash, copies originals to archive storage.
 """
 
+import json
 import shutil
 import time
-import json
 from pathlib import Path
+
 from rich.console import Console
+
 from localarchive.config import Config
-from localarchive.utils import file_hash, is_supported, timestamp_now
 from localarchive.db.database import Database
+from localarchive.utils import file_hash, is_supported, timestamp_now
 
 console = Console()
 
@@ -95,7 +97,7 @@ def _load_scan_manifest(path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             payload = json.load(f)
     except Exception:
         return {}

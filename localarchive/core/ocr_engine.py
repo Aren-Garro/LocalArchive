@@ -3,9 +3,11 @@ OCR engine abstraction.
 Supports PaddleOCR (default) and EasyOCR (optional).
 """
 
-from pathlib import Path
 from abc import ABC, abstractmethod
+from pathlib import Path
+
 from rich.console import Console
+
 from localarchive.config import OCRConfig
 
 console = Console()

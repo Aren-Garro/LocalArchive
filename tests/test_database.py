@@ -1,6 +1,7 @@
 """Tests for localarchive.db.database"""
 import tempfile
 from pathlib import Path
+
 from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
 

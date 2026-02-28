@@ -1,8 +1,8 @@
 """Shared utilities for LocalArchive."""
 
 import hashlib
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
 SUPPORTED_EXTENSIONS = {
     ".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp", ".gif",

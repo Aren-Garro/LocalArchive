@@ -3,25 +3,26 @@ LocalArchive CLI - main entry point.
 Commands: init, ingest, search, export, tag, process, classify, reprocess, watch, doctor, collections, timeline, audit, verify, backup, serve
 """
 
-import click
+import concurrent.futures
 import importlib.util
 import json
-import zipfile
 import shutil
 import sqlite3
 import tempfile
-import concurrent.futures
 import threading
 import time
+import zipfile
+from pathlib import Path, PurePosixPath
 from uuid import uuid4
-from pathlib import Path
-from pathlib import PurePosixPath
+
+import click
 from rich.console import Console
 from rich.table import Table
-from localarchive.config import Config, DEFAULT_CONFIG_PATH
+
+from localarchive.config import DEFAULT_CONFIG_PATH, Config
+from localarchive.core.ingester import Ingester, watch_directory
 from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
-from localarchive.core.ingester import Ingester, watch_directory
 from localarchive.utils import file_hash
 
 console = Console()
@@ -491,8 +492,12 @@ def process(
     as_json: bool,
 ):
     """Run OCR and field extraction on pending documents."""
-    from localarchive.core.ocr_engine import get_ocr_engine, pdf_to_images, extract_text_from_pdf_native
     from localarchive.core.extractor import extract_fields
+    from localarchive.core.ocr_engine import (
+        extract_text_from_pdf_native,
+        get_ocr_engine,
+        pdf_to_images,
+    )
     config = get_config()
     max_docs = limit if limit is not None else config.processing.default_limit
     _validate_limit(max_docs)
@@ -871,7 +876,7 @@ def doctor(as_json: bool):
     def _check(name: str, ok: bool, detail: str):
         checks.append((name, "PASS" if ok else "FAIL", detail))
 
-    _check("config_path", True, str((_runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH)))
+    _check("config_path", True, str(_runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH))
     _check("archive_dir_writable", config.archive_dir.exists() or config.archive_dir.parent.exists(), str(config.archive_dir))
     _check("db_parent_writable", config.db_path.parent.exists(), str(config.db_path.parent))
     _check("tmp_dir_writable", config.runtime.tmp_dir.exists() or config.runtime.tmp_dir.parent.exists(), str(config.runtime.tmp_dir))

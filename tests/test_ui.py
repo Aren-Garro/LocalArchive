@@ -3,6 +3,7 @@
 import re
 import uuid
 from pathlib import Path
+
 import pytest
 
 from localarchive.config import Config
@@ -46,6 +47,7 @@ def test_ui_index_and_search():
     pytest.importorskip("fastapi")
     pytest.importorskip("fastapi.testclient")
     from fastapi.testclient import TestClient
+
     from localarchive.ui.app import create_app
 
     tmp_path = _workspace_tmp_dir("localarchive-ui")
@@ -80,6 +82,7 @@ def test_ui_document_detail():
     pytest.importorskip("fastapi")
     pytest.importorskip("fastapi.testclient")
     from fastapi.testclient import TestClient
+
     from localarchive.ui.app import create_app
 
     tmp_path = _workspace_tmp_dir("localarchive-ui-detail")
@@ -107,6 +110,7 @@ def test_ui_document_actions():
     pytest.importorskip("fastapi")
     pytest.importorskip("fastapi.testclient")
     from fastapi.testclient import TestClient
+
     from localarchive.ui.app import create_app
 
     tmp_path = _workspace_tmp_dir("localarchive-ui-actions")
@@ -160,6 +164,7 @@ def test_ui_actions_reject_cross_origin():
     pytest.importorskip("fastapi")
     pytest.importorskip("fastapi.testclient")
     from fastapi.testclient import TestClient
+
     from localarchive.ui.app import create_app
 
     tmp_path = _workspace_tmp_dir("localarchive-ui-csrf")
@@ -187,6 +192,7 @@ def test_ui_status_filter_dropdown():
     pytest.importorskip("fastapi")
     pytest.importorskip("fastapi.testclient")
     from fastapi.testclient import TestClient
+
     from localarchive.ui.app import create_app
 
     tmp_path = _workspace_tmp_dir("localarchive-ui-filter")

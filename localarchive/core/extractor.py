@@ -3,9 +3,10 @@ Structured field extraction.
 Pulls dates, amounts, emails, phones from raw OCR text using regex.
 """
 
-import re
 import json
+import re
 from dataclasses import dataclass
+
 from localarchive.config import ExtractionConfig
 
 
