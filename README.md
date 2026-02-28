@@ -137,6 +137,7 @@ python -m localarchive.cli backup restore --path localarchive-backup.zip
 3. **Open formats** — Data stored in SQLite, exports to CSV/JSON/Markdown.
 4. **Privacy first** — Your documents never leave your device.
 5. **Offline always** — Full functionality without internet.
+6. **Free forever** — No fees, no subscriptions, no paywalls. Built to serve humanity.
 
 ## Tech Stack
 
@@ -215,6 +216,9 @@ checkpoint_batch_size = 25
 
 ## Roadmap
 
+**Mission**: Build a fee-less, privacy-respecting document intelligence tool that serves humanity. No paywalls, no subscriptions, no data harvesting—just useful software for everyone.
+
+### Completed ✓
 - [x] Project architecture & scaffolding
 - [x] CLI with init, ingest, search, export, tag, process, reprocess, watch, doctor, collections, timeline, audit, backup, serve commands
 - [x] SQLite + FTS5 database layer
@@ -224,7 +228,50 @@ checkpoint_batch_size = 25
 - [x] Web UI with search and document detail viewer
 - [x] Folder watcher (auto-ingest new files)
 - [x] Ollama integration for smart extraction (optional/local)
-- [ ] CRDT-based sync for multi-device (future)
+
+### Core Features (High Priority)
+- [ ] **Parallel processing** — Multi-core OCR and extraction to handle large document batches efficiently
+- [ ] **Smart document classification** — Auto-categorize by type (invoice, receipt, medical, research) using local ML models
+- [ ] **Table extraction** — Pull structured data from tables in PDFs and images
+- [ ] **Fuzzy search** — OCR-error tolerant search for better real-world usability
+- [ ] **Document similarity** — Auto-discover related documents in your archive
+- [ ] **Enhanced web UI** — Drag-and-drop upload, thumbnail previews, mobile-responsive design
+- [ ] **Multi-language OCR** — Expand beyond English with tested support for Spanish, French, German, Chinese, Arabic
+- [ ] **Accessibility features** — Screen reader support, keyboard navigation, high-contrast themes
+
+### Community & Ecosystem (Medium Priority)
+- [ ] **Plugin architecture** — Allow community-built extractors, exporters, and custom processors
+- [ ] **Localization (i18n)** — Translate UI and documentation to make LocalArchive globally accessible
+- [ ] **Docker containers** — One-command deployment for less technical users
+- [ ] **Pre-built binaries** — Windows .exe, macOS .app, Linux AppImage for non-Python users
+- [ ] **Community template library** — Share extraction rules for common document types (W-2s, insurance forms, research papers)
+- [ ] **Integration connectors** — Email ingestion (IMAP), folder sync daemons, workflow automation hooks
+- [ ] **Educational resources** — Video tutorials, use-case guides, academic partnership programs
+
+### Advanced Intelligence (Future)
+- [ ] **Entity relationship graphs** — Visualize connections between documents (invoice → payment → receipt)
+- [ ] **Multi-device sync (CRDT)** — Local-first sync without cloud dependency
+- [ ] **Duplicate detection** — Perceptual hashing to identify duplicate scans
+- [ ] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
+- [ ] **Redaction tools** — Privacy-safe document sharing with automated PII removal
+- [ ] **Version control** — Track document changes over time
+- [ ] **Citation extraction** — Auto-build bibliographies from research papers
+
+### Humanitarian Focus
+- [ ] **Medical record templates** — Pre-built extractors for lab results, prescriptions, insurance claims
+- [ ] **Multilingual nonprofit support** — Partner with NGOs to digitize archives in underserved regions
+- [ ] **Accessibility-first design** — Ensure LocalArchive works for users with disabilities
+- [ ] **Low-resource optimization** — Run efficiently on older hardware to maximize global access
+- [ ] **Open data advocacy** — Promote document format standards and anti-vendor-lock-in practices
+
+### Sustainability Model
+LocalArchive will remain **free and open-source forever**. Sustainability through:
+- **Voluntary donations** — Optional support from users who find value
+- **Institutional sponsorships** — Universities, libraries, nonprofits funding development
+- **Consulting/support services** — Professional implementation help for organizations (not required for use)
+- **Community contributions** — Developer time, documentation, translations, bug reports
+
+**No planned features will ever require payment.** If you build something useful, it should serve everyone.
 
 ## License
 
