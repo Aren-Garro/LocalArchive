@@ -283,21 +283,17 @@ def _shared_styles() -> str:
     """
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index(
-    request: Request,
-    q: str = "",
-    tag: str = "",
-    file_type: str = "",
-    status: str = "",
-    lang: str | None = None,
-    limit: int | None = None,
-    offset: int = 0,
-):
-    language = _resolve_language(request, lang)
-    results = []
-    page_limit = max(1, min(limit or config.ui.default_limit, 200))
-    offset = max(0, offset)
+def _status_count(status: str) -> int:
+    if status:
+        row = _db.conn.execute("SELECT COUNT(*) as cnt FROM documents WHERE status = ?", (status,)).fetchone()
+    else:
+        row = _db.conn.execute("SELECT COUNT(*) as cnt FROM documents").fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def _fetch_index_results(
+    q: str, tag: str, file_type: str, status: str, page_limit: int, offset: int
+) -> tuple[list[dict], int]:
     if q:
         results = search_engine.search(
             q,
@@ -313,27 +309,35 @@ async def index(
             file_type=file_type or None,
             status=status or None,
         )
-    else:
-        results = search_engine.recent(limit=page_limit, offset=offset, status=status or None)
-        if status:
-            row = _db.conn.execute(
-                "SELECT COUNT(*) as cnt FROM documents WHERE status = ?", (status,)
-            ).fetchone()
-        else:
-            row = _db.conn.execute("SELECT COUNT(*) as cnt FROM documents").fetchone()
-        total = int(row["cnt"]) if row else len(results)
+        return results, total
 
-    has_prev = offset > 0
-    has_next = (offset + page_limit) < total
-    cards = "".join(_render_card(doc, language) for doc in results)
-    csrf_token = _ensure_csrf_token(request)
+    results = search_engine.recent(limit=page_limit, offset=offset, status=status or None)
+    return results, _status_count(status)
+
+
+def _index_stats_text(language: str, q: str, total: int) -> str:
     plural = "s" if total != 1 else ""
-    stats_text = (
-        _t(language, "stats_found", total=total, plural=plural)
-        if q
-        else _t(language, "stats_archive", total=total, plural=plural)
-    )
-    html = f"""<!DOCTYPE html>
+    if q:
+        return _t(language, "stats_found", total=total, plural=plural)
+    return _t(language, "stats_archive", total=total, plural=plural)
+
+
+def _render_index_page(
+    language: str,
+    q: str,
+    tag: str,
+    file_type: str,
+    status: str,
+    page_limit: int,
+    offset: int,
+    total: int,
+    has_prev: bool,
+    has_next: bool,
+    cards: str,
+    stats_text: str,
+    csrf_token: str,
+) -> str:
+    return f"""<!DOCTYPE html>
 <html lang="{language}">
 <head>
     <meta charset="utf-8">
@@ -375,6 +379,133 @@ async def index(
     </main>
 </body>
 </html>"""
+
+
+def _render_fields_rows(doc: dict, language: str) -> str:
+    return "".join(
+        f"<tr><td>{escape(str(f.get('field_type', '')))}</td>"
+        f"<td>{escape(str(f.get('value', '')))}</td></tr>"
+        for f in doc.get("fields", [])
+    ) or f"<tr><td colspan='2'>{_t(language, 'no_extracted_fields')}</td></tr>"
+
+
+def _render_tables_html(doc: dict, language: str) -> str:
+    tables = doc.get("tables") or []
+    tables_html_parts: list[str] = []
+    for table in tables:
+        headers = table.get("headers") or []
+        rows = table.get("rows") or []
+        header_cells = "".join(f"<th>{escape(str(h))}</th>" for h in headers)
+        body_rows = "".join(
+            "<tr>" + "".join(f"<td>{escape(str(cell))}</td>" for cell in row) + "</tr>"
+            for row in rows
+        )
+        tables_html_parts.append(
+            "<div class='panel' style='margin-top:0.75rem;'>"
+            f"<p><strong>{_t(language, 'table_label', index=int(table.get('table_index', 0)) + 1)}</strong></p>"
+            f"<table><thead><tr>{header_cells}</tr></thead><tbody>{body_rows}</tbody></table>"
+            "</div>"
+        )
+    return "".join(tables_html_parts)
+
+
+def _render_related_html(doc_id: int) -> str:
+    related = _db.get_similar_documents(doc_id, limit=5)
+    if not related:
+        return ""
+    items = "".join(
+        f"<li><a href='/documents/{int(r.get('related_id', 0))}'>{escape(str(r.get('filename', 'Untitled')))}</a> "
+        f"<span class='hint'>(score={float(r.get('score', 0.0)):.3f})</span></li>"
+        for r in related
+    )
+    return f"<ul>{items}</ul>"
+
+
+def _render_document_detail_page(
+    doc: dict, doc_id: int, language: str, csrf_token: str, fields_rows: str, tables_html: str, related_html: str
+) -> str:
+    tags = ", ".join(escape(t) for t in doc.get("tags", [])) or _t(language, "none")
+    preview = escape((doc.get("ocr_text") or "")[:5000]).replace("\n", "<br>")
+    status = escape(str(doc.get("status", "?")))
+    return f"""<!DOCTYPE html>
+<html lang="{language}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{escape(doc.get("filename", "Document"))} - LocalArchive</title>
+    {_shared_styles()}
+</head>
+<body>
+    <a href="/?lang={language}" class="btn secondary">{_t(language, "back_to_search")}</a>
+    <h1>{escape(doc.get("filename", "Untitled"))}</h1>
+    <div class="panel">
+      <p><strong>{_t(language, "id_label")}:</strong> {doc["id"]}</p>
+      <p><strong>{_t(language, "type_short")}:</strong> {escape(str(doc.get("file_type", "?")))}</p>
+      <p><strong>{_t(language, "status_short")}:</strong> <span class="chip {status}">{status}</span></p>
+      <p><strong>{_t(language, "tags_short")}:</strong> {tags}</p>
+      <form action="/documents/{doc_id}/retry" method="post" style="margin-top:0.75rem;">
+          <input type="hidden" name="csrf_token" value="{csrf_token}">
+          <input type="hidden" name="lang" value="{language}">
+          <button class="btn" type="submit">{_t(language, "retry_processing")}</button>
+      </form>
+      <form action="/documents/{doc_id}/tags" method="post" style="margin-top:0.75rem;">
+          <label><strong>{_t(language, "update_tags")}:</strong></label><br>
+          <input type="hidden" name="csrf_token" value="{csrf_token}">
+          <input type="hidden" name="lang" value="{language}">
+          <input type="text" name="tags" value="{escape(", ".join(doc.get("tags", [])))}" style="width:100%;max-width:480px;">
+          <button class="btn" type="submit">{_t(language, "save_tags")}</button>
+      </form>
+    </div>
+    <h2>{_t(language, "extracted_fields")}</h2>
+    <table>
+        <thead><tr><th>{_t(language, "type_short")}</th><th>{_t(language, "value")}</th></tr></thead>
+        <tbody>{fields_rows}</tbody>
+    </table>
+    <h2>{_t(language, "ocr_preview")}</h2>
+    <div class="panel">{preview}</div>
+    <h2>{_t(language, "extracted_tables")}</h2>
+    {tables_html or f"<p class='hint'>{_t(language, 'no_tables_extracted')}</p>"}
+    <h2>{_t(language, "related_documents")}</h2>
+    {related_html or f"<p class='hint'>{_t(language, 'no_similarity_edges')}</p>"}
+</body>
+</html>"""
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(
+    request: Request,
+    q: str = "",
+    tag: str = "",
+    file_type: str = "",
+    status: str = "",
+    lang: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+):
+    language = _resolve_language(request, lang)
+    page_limit = max(1, min(limit or config.ui.default_limit, 200))
+    offset = max(0, offset)
+    results, total = _fetch_index_results(q, tag, file_type, status, page_limit, offset)
+    has_prev = offset > 0
+    has_next = (offset + page_limit) < total
+    cards = "".join(_render_card(doc, language) for doc in results)
+    csrf_token = _ensure_csrf_token(request)
+    stats_text = _index_stats_text(language, q, total)
+    html = _render_index_page(
+        language=language,
+        q=q,
+        tag=tag,
+        file_type=file_type,
+        status=status,
+        page_limit=page_limit,
+        offset=offset,
+        total=total,
+        has_prev=has_prev,
+        has_next=has_next,
+        cards=cards,
+        stats_text=stats_text,
+        csrf_token=csrf_token,
+    )
     return _with_lang_cookie(_with_csrf_cookie(HTMLResponse(content=html), csrf_token, request), language, request)
 
 
@@ -483,88 +614,20 @@ async def document_detail(request: Request, doc_id: int, lang: str | None = None
             language,
             request,
         )
-
-    tags = ", ".join(escape(t) for t in doc.get("tags", [])) or _t(language, "none")
-    fields_rows = (
-        "".join(
-            f"<tr><td>{escape(str(f.get('field_type', '')))}</td>"
-            f"<td>{escape(str(f.get('value', '')))}</td></tr>"
-            for f in doc.get("fields", [])
-        )
-        or f"<tr><td colspan='2'>{_t(language, 'no_extracted_fields')}</td></tr>"
-    )
-    preview = escape((doc.get("ocr_text") or "")[:5000]).replace("\n", "<br>")
-    status = escape(str(doc.get("status", "?")))
-    tables = doc.get("tables") or []
-    tables_html_parts: list[str] = []
-    for table in tables:
-        headers = table.get("headers") or []
-        rows = table.get("rows") or []
-        header_cells = "".join(f"<th>{escape(str(h))}</th>" for h in headers)
-        body_rows = "".join(
-            "<tr>" + "".join(f"<td>{escape(str(cell))}</td>" for cell in row) + "</tr>"
-            for row in rows
-        )
-        tables_html_parts.append(
-            "<div class='panel' style='margin-top:0.75rem;'>"
-            f"<p><strong>{_t(language, 'table_label', index=int(table.get('table_index', 0)) + 1)}</strong></p>"
-            f"<table><thead><tr>{header_cells}</tr></thead><tbody>{body_rows}</tbody></table>"
-            "</div>"
-        )
-    tables_html = "".join(tables_html_parts)
-    related = _db.get_similar_documents(doc_id, limit=5)
-    related_html = ""
-    if related:
-        items = "".join(
-            f"<li><a href='/documents/{int(r.get('related_id', 0))}'>{escape(str(r.get('filename', 'Untitled')))}</a> "
-            f"<span class='hint'>(score={float(r.get('score', 0.0)):.3f})</span></li>"
-            for r in related
-        )
-        related_html = f"<ul>{items}</ul>"
+    fields_rows = _render_fields_rows(doc, language)
+    tables_html = _render_tables_html(doc, language)
+    related_html = _render_related_html(doc_id)
     csrf_token = _ensure_csrf_token(request)
     response = HTMLResponse(
-        content=f"""<!DOCTYPE html>
-<html lang="{language}">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{escape(doc.get("filename", "Document"))} - LocalArchive</title>
-    {_shared_styles()}
-</head>
-<body>
-    <a href="/?lang={language}" class="btn secondary">{_t(language, "back_to_search")}</a>
-    <h1>{escape(doc.get("filename", "Untitled"))}</h1>
-    <div class="panel">
-      <p><strong>{_t(language, "id_label")}:</strong> {doc["id"]}</p>
-      <p><strong>{_t(language, "type_short")}:</strong> {escape(str(doc.get("file_type", "?")))}</p>
-      <p><strong>{_t(language, "status_short")}:</strong> <span class="chip {status}">{status}</span></p>
-      <p><strong>{_t(language, "tags_short")}:</strong> {tags}</p>
-      <form action="/documents/{doc_id}/retry" method="post" style="margin-top:0.75rem;">
-          <input type="hidden" name="csrf_token" value="{csrf_token}">
-          <input type="hidden" name="lang" value="{language}">
-          <button class="btn" type="submit">{_t(language, "retry_processing")}</button>
-      </form>
-      <form action="/documents/{doc_id}/tags" method="post" style="margin-top:0.75rem;">
-          <label><strong>{_t(language, "update_tags")}:</strong></label><br>
-          <input type="hidden" name="csrf_token" value="{csrf_token}">
-          <input type="hidden" name="lang" value="{language}">
-          <input type="text" name="tags" value="{escape(", ".join(doc.get("tags", [])))}" style="width:100%;max-width:480px;">
-          <button class="btn" type="submit">{_t(language, "save_tags")}</button>
-      </form>
-    </div>
-    <h2>{_t(language, "extracted_fields")}</h2>
-    <table>
-        <thead><tr><th>{_t(language, "type_short")}</th><th>{_t(language, "value")}</th></tr></thead>
-        <tbody>{fields_rows}</tbody>
-    </table>
-    <h2>{_t(language, "ocr_preview")}</h2>
-    <div class="panel">{preview}</div>
-    <h2>{_t(language, "extracted_tables")}</h2>
-    {tables_html or f"<p class='hint'>{_t(language, 'no_tables_extracted')}</p>"}
-    <h2>{_t(language, "related_documents")}</h2>
-    {related_html or f"<p class='hint'>{_t(language, 'no_similarity_edges')}</p>"}
-</body>
-</html>"""
+        content=_render_document_detail_page(
+            doc=doc,
+            doc_id=doc_id,
+            language=language,
+            csrf_token=csrf_token,
+            fields_rows=fields_rows,
+            tables_html=tables_html,
+            related_html=related_html,
+        )
     )
     return _with_lang_cookie(_with_csrf_cookie(response, csrf_token, request), language, request)
 
