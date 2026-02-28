@@ -25,40 +25,42 @@ class Ingester:
         self.config = config
         self.db = db
 
-    def ingest_path(self, path: Path) -> list[int]:
+    def ingest_path(self, path: Path, source_name: str | None = None) -> list[int]:
         path = Path(path).resolve()
         if path.is_file():
-            return self._ingest_file(path)
+            return self._ingest_file(path, source_name=source_name)
         elif path.is_dir():
             return self._ingest_directory(path)
         else:
             console.print(f"[red]Path not found:[/red] {path}")
             return []
 
-    def _ingest_file(self, filepath: Path) -> list[int]:
-        if not is_supported(filepath):
-            console.print(f"[yellow]Skipping unsupported file:[/yellow] {filepath.name}")
+    def _ingest_file(self, filepath: Path, source_name: str | None = None) -> list[int]:
+        display_name = source_name or filepath.name
+        source_ext = Path(display_name).suffix.lower()
+        if not is_supported(Path(display_name)):
+            console.print(f"[yellow]Skipping unsupported file:[/yellow] {display_name}")
             return []
 
         fhash = file_hash(filepath)
         if self.db.document_exists_by_hash(fhash):
-            console.print(f"[dim]Already ingested:[/dim] {filepath.name}")
+            console.print(f"[dim]Already ingested:[/dim] {display_name}")
             return []
 
-        dest = self.config.archive_dir / fhash[:2] / f"{fhash}{filepath.suffix.lower()}"
+        dest = self.config.archive_dir / fhash[:2] / f"{fhash}{source_ext}"
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(filepath, dest)
 
         doc_id = self.db.insert_document(
-            filename=filepath.name,
+            filename=Path(display_name).name,
             filepath=str(dest),
             file_hash=fhash,
-            file_type=filepath.suffix.lower().lstrip("."),
+            file_type=source_ext.lstrip("."),
             file_size=filepath.stat().st_size,
             ingested_at=timestamp_now(),
             status="pending_ocr",
         )
-        console.print(f"[green]Ingested:[/green] {filepath.name} -> ID {doc_id}")
+        console.print(f"[green]Ingested:[/green] {display_name} -> ID {doc_id}")
         return [doc_id]
 
     def _ingest_directory(self, dirpath: Path) -> list[int]:

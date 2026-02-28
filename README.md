@@ -127,6 +127,7 @@ python -m localarchive.cli classify --limit 200 --explain
 
 # Launch web UI (optional)
 python -m localarchive.cli serve
+# Browser upload page: http://127.0.0.1:8877/ingest
 
 # Environment and dependency checks
 python -m localarchive.cli doctor

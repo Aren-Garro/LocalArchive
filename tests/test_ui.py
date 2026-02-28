@@ -1,5 +1,6 @@
 """Tests for LocalArchive FastAPI UI routes."""
 
+import io
 import re
 import uuid
 from pathlib import Path
@@ -64,6 +65,7 @@ def test_ui_index_and_search():
     res = client.get("/")
     assert res.status_code == 200
     assert "LocalArchive" in res.text
+    assert "Upload Documents" in res.text
     assert "invoice.pdf" in res.text
     assert 'aria-label="Pagination"' in res.text
     assert "chip processed" in res.text
@@ -131,6 +133,7 @@ def test_ui_document_actions():
     res = client.post(
         f"/documents/{doc_id}/retry",
         data={"csrf_token": csrf_token},
+        headers={"origin": "http://testserver"},
         follow_redirects=False,
     )
     assert res.status_code == 303
@@ -148,6 +151,7 @@ def test_ui_document_actions():
     res = client.post(
         f"/documents/{doc_id}/tags",
         data={"tags": "health, urgent", "csrf_token": csrf_token},
+        headers={"origin": "http://testserver"},
         follow_redirects=False,
     )
     assert res.status_code == 303
@@ -186,6 +190,44 @@ def test_ui_actions_reject_cross_origin():
         follow_redirects=False,
     )
     assert res.status_code == 403
+
+
+def test_ui_ingest_upload():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi.testclient")
+    from fastapi.testclient import TestClient
+
+    from localarchive.ui.app import create_app
+
+    tmp_path = _workspace_tmp_dir("localarchive-ui-upload")
+    db_path = tmp_path / "ui-upload.db"
+    config = Config(archive_dir=tmp_path / "archive", db_path=db_path)
+    config.archive_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(db_path)
+    db.initialize()
+    db.close()
+
+    app = create_app(config)
+    client = TestClient(app)
+    form = client.get("/ingest")
+    assert form.status_code == 200
+    csrf_token = _csrf_token_from_html(form.text)
+    files = [("files", ("upload.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf"))]
+    res = client.post(
+        "/ingest",
+        data={"csrf_token": csrf_token},
+        files=files,
+        headers={"origin": "http://testserver"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+
+    db = Database(db_path)
+    db.initialize()
+    docs = db.list_documents(limit=10)
+    db.close()
+    assert len(docs) == 1
+    assert docs[0]["filename"] == "upload.pdf"
 
 
 def test_ui_status_filter_dropdown():
