@@ -1052,7 +1052,8 @@ def backup_list(limit: int, as_json: bool, prune_missing: bool, missing_only: bo
 
 @backup.command("create")
 @click.option("--path", "backup_path", type=click.Path(dir_okay=False, path_type=Path), required=True)
-def backup_create(backup_path: Path):
+@click.option("--json", "as_json", is_flag=True, help="Emit backup summary as JSON.")
+def backup_create(backup_path: Path, as_json: bool):
     """Create a backup archive including DB and config."""
     config = get_config()
     config.ensure_dirs()
@@ -1085,6 +1086,7 @@ def backup_create(backup_path: Path):
     db.record_backup(str(backup_path), db_hash=db_hash, archive_file_count=archive_file_count, verified=verified)
     backups = db.list_backups(limit=1000)
     keep = max(1, config.reliability.backup_retention_count)
+    pruned_count = 0
     for old in backups[keep:]:
         old_path = Path(old["path"])
         try:
@@ -1093,12 +1095,24 @@ def backup_create(backup_path: Path):
         except Exception:
             pass
         db.delete_backup_record(str(old.get("path", "")))
+        pruned_count += 1
     db.close()
     try:
         snapshot_path.unlink(missing_ok=True)
     except PermissionError:
         # On Windows, temporary file handles can linger briefly after zip write.
         pass
+    payload = {
+        "created": True,
+        "path": str(backup_path),
+        "archive_file_count": int(archive_file_count),
+        "verified": bool(verified),
+        "db_hash": db_hash,
+        "pruned_count": int(pruned_count),
+    }
+    if as_json:
+        _emit_json(payload)
+        return
     console.print(f"[green]Backup created:[/green] {backup_path}")
 
 

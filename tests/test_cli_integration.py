@@ -247,6 +247,38 @@ def test_backup_retention_keeps_newest_only(monkeypatch):
     assert payload["backups"][0]["exists"] is True
 
 
+def test_backup_create_json_summary(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-backup-create-json")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.reliability.backup_retention_count = 1
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    config.archive_dir.mkdir(parents=True, exist_ok=True)
+    (config.archive_dir / "doc.txt").write_text("hello")
+    db = Database(config.db_path)
+    db.initialize()
+    db.close()
+
+    runner = CliRunner()
+    backup1 = tmp_path / "one.zip"
+    backup2 = tmp_path / "two.zip"
+    result = runner.invoke(main, ["backup", "create", "--path", str(backup1), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["created"] is True
+    assert payload["path"].endswith("one.zip")
+    assert payload["archive_file_count"] >= 1
+    assert payload["pruned_count"] == 0
+
+    result = runner.invoke(main, ["backup", "create", "--path", str(backup2), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["created"] is True
+    assert payload["path"].endswith("two.zip")
+    assert payload["archive_file_count"] >= 1
+    assert payload["pruned_count"] >= 1
+
+
 def test_backup_list_prune_missing(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-backup-prune")
     config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
