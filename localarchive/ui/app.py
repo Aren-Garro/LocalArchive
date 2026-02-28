@@ -1,25 +1,26 @@
 """FastAPI web UI for LocalArchive. Lightweight HTMX-based interface."""
 
-from pathlib import Path
 from html import escape
-from fastapi import FastAPI, Request, Form
+
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+
 from localarchive.config import Config
 from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
 
 app = FastAPI(title="LocalArchive", docs_url=None, redoc_url=None)
 config: Config = None
-db: Database = None
+_db: Database = None
 search_engine: SearchEngine = None
 
 
 def create_app(cfg: Config) -> FastAPI:
-    global config, db, search_engine
+    global config, _db, search_engine
     config = cfg
-    db = Database(cfg.db_path)
-    db.initialize()
-    search_engine = SearchEngine(db)
+    _db = Database(cfg.db_path)
+    _db.initialize()
+    search_engine = SearchEngine(_db)
     return app
 
 
@@ -34,10 +35,10 @@ async def index(
     offset: int = 0,
 ):
     results = []
-    total = 0
     page_limit = limit or config.ui.default_limit
     page_limit = max(1, min(page_limit, 200))
     offset = max(0, offset)
+
     if q:
         results = search_engine.search(
             q,
@@ -50,8 +51,14 @@ async def index(
         total = search_engine.count(q, status=status or None)
     else:
         results = search_engine.recent(limit=page_limit, offset=offset, status=status or None)
-        total = len(results)
+        if status:
+            row = _db.conn.execute("SELECT COUNT(*) as cnt FROM documents WHERE status = ?", (status,)).fetchone()
+        else:
+            row = _db.conn.execute("SELECT COUNT(*) as cnt FROM documents").fetchone()
+        total = int(row["cnt"]) if row else len(results)
 
+    has_prev = offset > 0
+    has_next = (offset + page_limit) < total
     cards = "".join(_render_card(doc) for doc in results)
     plural = "s" if total != 1 else ""
     context = "found" if q else "in archive"
@@ -68,33 +75,50 @@ async def index(
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                max-width: 900px; margin: 0 auto; padding: 2rem; background: #fafafa; color: #1a1a1a; }}
         h1 {{ font-size: 1.8rem; margin-bottom: 1rem; }}
-        .search-box {{ display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }}
-        .search-box input {{ flex: 1; padding: 0.75rem; font-size: 1rem; border: 2px solid #ddd; border-radius: 8px; }}
+        .search-box {{ display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }}
+        .search-box input, .search-box select {{
+            flex: 1; min-width: 120px; padding: 0.75rem; font-size: 1rem; border: 2px solid #ddd; border-radius: 8px;
+        }}
         .search-box button {{ padding: 0.75rem 1.5rem; font-size: 1rem; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; }}
         .search-box button:hover {{ background: #1d4ed8; }}
         .stats {{ color: #666; margin-bottom: 1rem; font-size: 0.9rem; }}
+        .chip {{ display:inline-flex; align-items:center; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; margin-left:0.4rem; border:1px solid #ddd; }}
+        .chip.pending_ocr {{ background:#fff7ed; border-color:#fed7aa; color:#9a3412; }}
+        .chip.processed {{ background:#ecfdf5; border-color:#86efac; color:#166534; }}
+        .chip.error {{ background:#fef2f2; border-color:#fca5a5; color:#991b1b; }}
         .doc-card {{ background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; }}
         .doc-card h3 {{ font-size: 1rem; margin-bottom: 0.25rem; }}
         .doc-card .meta {{ color: #666; font-size: 0.85rem; }}
         .doc-card .preview {{ margin-top: 0.5rem; color: #444; font-size: 0.9rem; background: #f9fafb; padding: 0.5rem; border-radius: 4px; max-height: 100px; overflow: hidden; }}
+        .pager {{ margin-top:1rem; display:flex; gap:0.75rem; align-items:center; }}
+        .pager a {{ color:#1d4ed8; }}
+        .pager a[aria-disabled="true"] {{ color:#94a3b8; pointer-events:none; text-decoration:none; }}
     </style>
 </head>
 <body>
     <h1>&#128230; LocalArchive</h1>
-    <form class="search-box" action="/" method="get">
-        <input type="text" name="q" value="{escape(q)}" placeholder="Search your documents..." autofocus>
-        <input type="text" name="tag" value="{escape(tag)}" placeholder="tag">
-        <input type="text" name="file_type" value="{escape(file_type)}" placeholder="type (pdf/png)">
-        <input type="text" name="status" value="{escape(status)}" placeholder="status">
-        <input type="number" name="limit" value="{page_limit}" min="1" max="200">
+    <form class="search-box" action="/" method="get" aria-label="Document Search">
+        <input type="text" name="q" value="{escape(q)}" placeholder="Search your documents..." autofocus aria-label="Query">
+        <input type="text" name="tag" value="{escape(tag)}" placeholder="tag" aria-label="Tag Filter">
+        <input type="text" name="file_type" value="{escape(file_type)}" placeholder="type (pdf/png)" aria-label="Type Filter">
+        <select name="status" aria-label="Status Filter">
+            <option value="" {"selected" if not status else ""}>all statuses</option>
+            <option value="pending_ocr" {"selected" if status == "pending_ocr" else ""}>pending_ocr</option>
+            <option value="processed" {"selected" if status == "processed" else ""}>processed</option>
+            <option value="error" {"selected" if status == "error" else ""}>error</option>
+        </select>
+        <input type="number" name="limit" value="{page_limit}" min="1" max="200" aria-label="Results Per Page">
         <button type="submit">Search</button>
     </form>
     <p class="stats">{total} document{plural} {context}</p>
-    {cards}
-    <div style="margin-top:1rem;display:flex;gap:0.75rem;">
-      <a href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={max(0, offset-page_limit)}">Prev</a>
-      <a href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={offset+page_limit}">Next</a>
-    </div>
+    <main aria-live="polite">
+        {cards}
+    </main>
+    <nav class="pager" aria-label="Pagination">
+      <a tabindex="0" aria-disabled="{str(not has_prev).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={max(0, offset-page_limit)}">Prev</a>
+      <span>Showing {offset + 1 if total else 0} - {min(offset + page_limit, total)} of {total}</span>
+      <a tabindex="0" aria-disabled="{str(not has_next).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={offset+page_limit}">Next</a>
+    </nav>
 </body>
 </html>"""
     return HTMLResponse(content=html)
@@ -102,7 +126,7 @@ async def index(
 
 @app.get("/documents/{doc_id}", response_class=HTMLResponse)
 async def document_detail(doc_id: int):
-    doc = db.get_document_detail(doc_id)
+    doc = _db.get_document_detail(doc_id)
     if not doc:
         return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
 
@@ -113,6 +137,7 @@ async def document_detail(doc_id: int):
         for f in doc.get("fields", [])
     ) or "<tr><td colspan='2'>No extracted fields</td></tr>"
     preview = escape((doc.get("ocr_text") or "")[:5000]).replace("\n", "<br>")
+    status = escape(str(doc.get("status", "?")))
     return HTMLResponse(
         content=f"""<!DOCTYPE html>
 <html lang="en">
@@ -126,6 +151,10 @@ async def document_detail(doc_id: int):
         table {{ width: 100%; border-collapse: collapse; margin-top: 1rem; }}
         th, td {{ border: 1px solid #ddd; padding: 0.5rem; text-align: left; }}
         .preview {{ margin-top: 1rem; background: #fff; border: 1px solid #e5e7eb; padding: 1rem; border-radius: 8px; }}
+        .chip {{ display:inline-flex; align-items:center; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; border:1px solid #ddd; }}
+        .chip.pending_ocr {{ background:#fff7ed; border-color:#fed7aa; color:#9a3412; }}
+        .chip.processed {{ background:#ecfdf5; border-color:#86efac; color:#166534; }}
+        .chip.error {{ background:#fef2f2; border-color:#fca5a5; color:#991b1b; }}
     </style>
 </head>
 <body>
@@ -133,7 +162,7 @@ async def document_detail(doc_id: int):
     <h1>{escape(doc.get("filename", "Untitled"))}</h1>
     <p><strong>ID:</strong> {doc["id"]}</p>
     <p><strong>Type:</strong> {escape(str(doc.get("file_type", "?")))}</p>
-    <p><strong>Status:</strong> {escape(str(doc.get("status", "?")))}</p>
+    <p><strong>Status:</strong> <span class="chip {status}">{status}</span></p>
     <p><strong>Tags:</strong> {tags}</p>
     <form action="/documents/{doc_id}/retry" method="post" style="margin-top:0.75rem;">
         <button type="submit">Retry Processing</button>
@@ -157,29 +186,30 @@ async def document_detail(doc_id: int):
 
 @app.post("/documents/{doc_id}/retry")
 async def retry_document(doc_id: int):
-    doc = db.get_document(doc_id)
+    doc = _db.get_document(doc_id)
     if not doc:
         return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
-    db.mark_for_reprocess([doc_id])
+    _db.mark_for_reprocess([doc_id])
     return RedirectResponse(url=f"/documents/{doc_id}", status_code=303)
 
 
 @app.post("/documents/{doc_id}/tags")
 async def update_document_tags(doc_id: int, tags: str = Form(default="")):
-    doc = db.get_document(doc_id)
+    doc = _db.get_document(doc_id)
     if not doc:
         return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
     parsed = [tag.strip() for tag in tags.split(",")]
-    db.set_tags(doc_id, parsed)
+    _db.set_tags(doc_id, parsed)
     return RedirectResponse(url=f"/documents/{doc_id}", status_code=303)
 
 
 def _render_card(doc: dict) -> str:
     preview = escape((doc.get("ocr_text") or "")[: config.ui.show_preview_chars])
     preview_html = f'<div class="preview">{preview}</div>' if preview else ""
+    status = escape(str(doc.get("status", "?")))
     return f"""
     <div class="doc-card">
-        <h3><a href="/documents/{doc['id']}">{escape(doc.get("filename", "Untitled"))}</a></h3>
+        <h3><a href="/documents/{doc['id']}" tabindex="0">{escape(doc.get("filename", "Untitled"))}</a><span class="chip {status}">{status}</span></h3>
         <p class="meta">ID: {doc["id"]} &middot; {escape(str(doc.get("file_type", "?")))} &middot; {escape(str(doc.get("ingested_at", "")))}</p>
         {preview_html}
     </div>"""

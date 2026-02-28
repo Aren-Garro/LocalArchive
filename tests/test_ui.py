@@ -56,6 +56,8 @@ def test_ui_index_and_search():
     assert res.status_code == 200
     assert "LocalArchive" in res.text
     assert "invoice.pdf" in res.text
+    assert "aria-label=\"Pagination\"" in res.text
+    assert "chip processed" in res.text
 
     res = client.get("/", params={"q": "Acme", "tag": "finance", "file_type": "pdf"})
     assert res.status_code == 200
@@ -83,6 +85,7 @@ def test_ui_document_detail():
     assert res.status_code == 200
     assert "Extracted Fields" in res.text
     assert "$42.00" in res.text
+    assert "chip processed" in res.text
 
     res = client.get("/documents/99999")
     assert res.status_code == 404
@@ -125,3 +128,25 @@ def test_ui_document_actions():
     db.close()
     assert "health" in tags
     assert "urgent" in tags
+
+
+def test_ui_status_filter_dropdown():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi.testclient")
+    from fastapi.testclient import TestClient
+    from localarchive.ui.app import create_app
+
+    tmp_path = _workspace_tmp_dir("localarchive-ui-filter")
+    db_path = tmp_path / "ui-filter.db"
+    config = Config(archive_dir=tmp_path / "archive", db_path=db_path)
+    db = Database(db_path)
+    db.initialize()
+    doc_id = _seed_db(db)
+    db.update_document(doc_id, status="error", error_message="oops")
+    db.close()
+
+    app = create_app(config)
+    client = TestClient(app)
+    res = client.get("/", params={"status": "error"})
+    assert res.status_code == 200
+    assert "selected\">error</option>" in res.text
