@@ -33,6 +33,7 @@ def test_ui_browser_smoke():
     pytest.importorskip("fastapi")
     uvicorn = pytest.importorskip("uvicorn")
     from localarchive.ui.app import create_app
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:

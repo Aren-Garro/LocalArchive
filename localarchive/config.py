@@ -135,7 +135,9 @@ class Config:
                 config.ocr = OCRConfig(
                     engine=ocr_data.get("engine", config.ocr.engine),
                     languages=ocr_data.get("languages", config.ocr.languages),
-                    confidence_threshold=ocr_data.get("confidence_threshold", config.ocr.confidence_threshold),
+                    confidence_threshold=ocr_data.get(
+                        "confidence_threshold", config.ocr.confidence_threshold
+                    ),
                 )
             ext_data = data.get("extraction", {})
             if ext_data:
@@ -150,51 +152,82 @@ class Config:
                     host=ui_data.get("host", config.ui.host),
                     port=ui_data.get("port", config.ui.port),
                     default_limit=int(ui_data.get("default_limit", config.ui.default_limit)),
-                    show_preview_chars=int(ui_data.get("show_preview_chars", config.ui.show_preview_chars)),
+                    show_preview_chars=int(
+                        ui_data.get("show_preview_chars", config.ui.show_preview_chars)
+                    ),
                 )
             watch_data = data.get("watch", {})
             if watch_data:
                 config.watch = WatchConfig(
-                    interval_seconds=int(watch_data.get("interval_seconds", config.watch.interval_seconds)),
-                    manifest_path=Path(
-                        os.path.expanduser(watch_data.get("manifest_path", str(config.watch.manifest_path)))
+                    interval_seconds=int(
+                        watch_data.get("interval_seconds", config.watch.interval_seconds)
                     ),
-                    manifest_gc_days=int(watch_data.get("manifest_gc_days", config.watch.manifest_gc_days)),
+                    manifest_path=Path(
+                        os.path.expanduser(
+                            watch_data.get("manifest_path", str(config.watch.manifest_path))
+                        )
+                    ),
+                    manifest_gc_days=int(
+                        watch_data.get("manifest_gc_days", config.watch.manifest_gc_days)
+                    ),
                 )
             runtime_data = data.get("runtime", {})
             if runtime_data:
                 config.runtime = RuntimeConfig(
                     max_workers=int(runtime_data.get("max_workers", config.runtime.max_workers)),
-                    tmp_dir=Path(os.path.expanduser(runtime_data.get("tmp_dir", str(config.runtime.tmp_dir)))),
+                    tmp_dir=Path(
+                        os.path.expanduser(runtime_data.get("tmp_dir", str(config.runtime.tmp_dir)))
+                    ),
                     fail_fast=bool(runtime_data.get("fail_fast", config.runtime.fail_fast)),
-                    cleanup_temp_files=bool(runtime_data.get("cleanup_temp_files", config.runtime.cleanup_temp_files)),
+                    cleanup_temp_files=bool(
+                        runtime_data.get("cleanup_temp_files", config.runtime.cleanup_temp_files)
+                    ),
                 )
             processing_data = data.get("processing", {})
             if processing_data:
                 config.processing = ProcessingConfig(
                     pdf_native_text_min_chars=int(
-                        processing_data.get("pdf_native_text_min_chars", config.processing.pdf_native_text_min_chars)
+                        processing_data.get(
+                            "pdf_native_text_min_chars", config.processing.pdf_native_text_min_chars
+                        )
                     ),
-                    default_limit=int(processing_data.get("default_limit", config.processing.default_limit)),
-                    commit_batch_size=int(processing_data.get("commit_batch_size", config.processing.commit_batch_size)),
-                    writer_flush_ms=int(processing_data.get("writer_flush_ms", config.processing.writer_flush_ms)),
+                    default_limit=int(
+                        processing_data.get("default_limit", config.processing.default_limit)
+                    ),
+                    commit_batch_size=int(
+                        processing_data.get(
+                            "commit_batch_size", config.processing.commit_batch_size
+                        )
+                    ),
+                    writer_flush_ms=int(
+                        processing_data.get("writer_flush_ms", config.processing.writer_flush_ms)
+                    ),
                     max_errors_per_run=int(
-                        processing_data.get("max_errors_per_run", config.processing.max_errors_per_run)
+                        processing_data.get(
+                            "max_errors_per_run", config.processing.max_errors_per_run
+                        )
                     ),
                     resume_checkpoint_interval=int(
                         processing_data.get(
-                            "resume_checkpoint_interval", config.processing.resume_checkpoint_interval
+                            "resume_checkpoint_interval",
+                            config.processing.resume_checkpoint_interval,
                         )
                     ),
                 )
             research_data = data.get("research", {})
             if research_data:
                 config.research = ResearchConfig(
-                    citation_styles=list(research_data.get("citation_styles", config.research.citation_styles)),
-                    default_collections=list(
-                        research_data.get("default_collections", config.research.default_collections)
+                    citation_styles=list(
+                        research_data.get("citation_styles", config.research.citation_styles)
                     ),
-                    entity_priority=list(research_data.get("entity_priority", config.research.entity_priority)),
+                    default_collections=list(
+                        research_data.get(
+                            "default_collections", config.research.default_collections
+                        )
+                    ),
+                    entity_priority=list(
+                        research_data.get("entity_priority", config.research.entity_priority)
+                    ),
                 )
             autopilot_data = data.get("autopilot", {})
             if autopilot_data:
@@ -204,20 +237,32 @@ class Config:
                         "classification_model", config.autopilot.classification_model
                     ),
                     confidence_threshold=float(
-                        autopilot_data.get("confidence_threshold", config.autopilot.confidence_threshold)
+                        autopilot_data.get(
+                            "confidence_threshold", config.autopilot.confidence_threshold
+                        )
                     ),
                     auto_tag=bool(autopilot_data.get("auto_tag", config.autopilot.auto_tag)),
                 )
             search_data = data.get("search", {})
             if search_data:
                 config.search = SearchConfig(
-                    enable_semantic=bool(search_data.get("enable_semantic", config.search.enable_semantic)),
-                    embedding_model=search_data.get("embedding_model", config.search.embedding_model),
+                    enable_semantic=bool(
+                        search_data.get("enable_semantic", config.search.enable_semantic)
+                    ),
+                    embedding_model=search_data.get(
+                        "embedding_model", config.search.embedding_model
+                    ),
                     reranker=search_data.get("reranker", config.search.reranker),
-                    snippet_chars=int(search_data.get("snippet_chars", config.search.snippet_chars)),
-                    facet_defaults=list(search_data.get("facet_defaults", config.search.facet_defaults)),
+                    snippet_chars=int(
+                        search_data.get("snippet_chars", config.search.snippet_chars)
+                    ),
+                    facet_defaults=list(
+                        search_data.get("facet_defaults", config.search.facet_defaults)
+                    ),
                     enable_fuzzy=bool(search_data.get("enable_fuzzy", config.search.enable_fuzzy)),
-                    fuzzy_threshold=float(search_data.get("fuzzy_threshold", config.search.fuzzy_threshold)),
+                    fuzzy_threshold=float(
+                        search_data.get("fuzzy_threshold", config.search.fuzzy_threshold)
+                    ),
                     fuzzy_max_candidates=int(
                         search_data.get("fuzzy_max_candidates", config.search.fuzzy_max_candidates)
                     ),
@@ -225,13 +270,18 @@ class Config:
             reliability_data = data.get("reliability", {})
             if reliability_data:
                 config.reliability = ReliabilityConfig(
-                    backup_interval=int(reliability_data.get("backup_interval", config.reliability.backup_interval)),
+                    backup_interval=int(
+                        reliability_data.get("backup_interval", config.reliability.backup_interval)
+                    ),
                     integrity_check_on_startup=bool(
                         reliability_data.get(
-                            "integrity_check_on_startup", config.reliability.integrity_check_on_startup
+                            "integrity_check_on_startup",
+                            config.reliability.integrity_check_on_startup,
                         )
                     ),
-                    max_retries=int(reliability_data.get("max_retries", config.reliability.max_retries)),
+                    max_retries=int(
+                        reliability_data.get("max_retries", config.reliability.max_retries)
+                    ),
                     checkpoint_batch_size=int(
                         reliability_data.get(
                             "checkpoint_batch_size", config.reliability.checkpoint_batch_size
@@ -239,14 +289,19 @@ class Config:
                     ),
                     auto_verify_after_restore=bool(
                         reliability_data.get(
-                            "auto_verify_after_restore", config.reliability.auto_verify_after_restore
+                            "auto_verify_after_restore",
+                            config.reliability.auto_verify_after_restore,
                         )
                     ),
                     backup_retention_count=int(
-                        reliability_data.get("backup_retention_count", config.reliability.backup_retention_count)
+                        reliability_data.get(
+                            "backup_retention_count", config.reliability.backup_retention_count
+                        )
                     ),
                     backup_verify_on_create=bool(
-                        reliability_data.get("backup_verify_on_create", config.reliability.backup_verify_on_create)
+                        reliability_data.get(
+                            "backup_verify_on_create", config.reliability.backup_verify_on_create
+                        )
                     ),
                 )
         config.validate()
@@ -319,7 +374,11 @@ class Config:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "general": {"archive_dir": str(self.archive_dir), "db_path": str(self.db_path)},
-            "ocr": {"engine": self.ocr.engine, "languages": self.ocr.languages, "confidence_threshold": self.ocr.confidence_threshold},
+            "ocr": {
+                "engine": self.ocr.engine,
+                "languages": self.ocr.languages,
+                "confidence_threshold": self.ocr.confidence_threshold,
+            },
             "extraction": {
                 "use_local_llm": self.extraction.use_local_llm,
                 "ollama_model": self.extraction.ollama_model,

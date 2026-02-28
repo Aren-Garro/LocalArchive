@@ -10,8 +10,15 @@ class SearchEngine:
     def __init__(self, db: Database):
         self.db = db
 
-    def search(self, query: str, limit: int = 20, offset: int = 0,
-               tag: str | None = None, file_type: str | None = None, status: str | None = None) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        limit: int = 20,
+        offset: int = 0,
+        tag: str | None = None,
+        file_type: str | None = None,
+        status: str | None = None,
+    ) -> list[dict]:
         base_query = """
             SELECT d.*, rank FROM documents_fts fts
             JOIN documents d ON d.id = fts.rowid

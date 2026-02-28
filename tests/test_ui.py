@@ -65,7 +65,7 @@ def test_ui_index_and_search():
     assert res.status_code == 200
     assert "LocalArchive" in res.text
     assert "invoice.pdf" in res.text
-    assert "aria-label=\"Pagination\"" in res.text
+    assert 'aria-label="Pagination"' in res.text
     assert "chip processed" in res.text
 
     res = client.get("/", params={"q": "Acme", "tag": "finance", "file_type": "pdf"})
@@ -208,4 +208,4 @@ def test_ui_status_filter_dropdown():
     client = TestClient(app)
     res = client.get("/", params={"status": "error"})
     assert res.status_code == 200
-    assert "selected\">error</option>" in res.text
+    assert 'selected">error</option>' in res.text

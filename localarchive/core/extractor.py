@@ -12,7 +12,7 @@ from localarchive.config import ExtractionConfig
 
 @dataclass
 class ExtractedField:
-    field_type: str   # "date", "amount", "email", "phone", "entity"
+    field_type: str  # "date", "amount", "email", "phone", "entity"
     value: str
     raw_match: str
     start: int
@@ -46,26 +46,40 @@ def _extract_fields_regex(text: str) -> list[ExtractedField]:
 
     for pattern in DATE_PATTERNS:
         for match in re.finditer(pattern, text, re.IGNORECASE):
-            fields.append(ExtractedField("date", match.group(1), match.group(0), match.start(), match.end()))
+            fields.append(
+                ExtractedField("date", match.group(1), match.group(0), match.start(), match.end())
+            )
 
     for pattern in AMOUNT_PATTERNS:
         for match in re.finditer(pattern, text):
-            fields.append(ExtractedField("amount", match.group(1), match.group(0), match.start(), match.end()))
+            fields.append(
+                ExtractedField("amount", match.group(1), match.group(0), match.start(), match.end())
+            )
 
     for match in re.finditer(EMAIL_PATTERN, text):
-        fields.append(ExtractedField("email", match.group(1), match.group(0), match.start(), match.end()))
+        fields.append(
+            ExtractedField("email", match.group(1), match.group(0), match.start(), match.end())
+        )
 
     for match in re.finditer(PHONE_PATTERN, text):
-        fields.append(ExtractedField("phone", match.group(1), match.group(0), match.start(), match.end()))
+        fields.append(
+            ExtractedField("phone", match.group(1), match.group(0), match.start(), match.end())
+        )
 
     for match in re.finditer(DOI_PATTERN, text, re.IGNORECASE):
-        fields.append(ExtractedField("doi", match.group(1), match.group(0), match.start(), match.end()))
+        fields.append(
+            ExtractedField("doi", match.group(1), match.group(0), match.start(), match.end())
+        )
 
     for match in re.finditer(ARXIV_PATTERN, text, re.IGNORECASE):
-        fields.append(ExtractedField("arxiv", match.group(1), match.group(0), match.start(), match.end()))
+        fields.append(
+            ExtractedField("arxiv", match.group(1), match.group(0), match.start(), match.end())
+        )
 
     for match in re.finditer(YEAR_PATTERN, text):
-        fields.append(ExtractedField("year", match.group(1), match.group(0), match.start(), match.end()))
+        fields.append(
+            ExtractedField("year", match.group(1), match.group(0), match.start(), match.end())
+        )
 
     # Deduplicate
     seen = set()
@@ -82,6 +96,7 @@ def extract_fields_with_spacy(text: str) -> list[ExtractedField]:
     """Extract named entities using spaCy (optional)."""
     try:
         import spacy
+
         nlp = spacy.load("en_core_web_sm")
     except Exception:
         return []
@@ -90,9 +105,11 @@ def extract_fields_with_spacy(text: str) -> list[ExtractedField]:
     fields = []
     for ent in doc.ents:
         if ent.label_ in ("PERSON", "ORG", "GPE", "DATE", "MONEY"):
-            fields.append(ExtractedField(
-                f"entity_{ent.label_.lower()}", ent.text, ent.text, ent.start_char, ent.end_char
-            ))
+            fields.append(
+                ExtractedField(
+                    f"entity_{ent.label_.lower()}", ent.text, ent.text, ent.start_char, ent.end_char
+                )
+            )
     return fields
 
 

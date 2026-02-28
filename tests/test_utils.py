@@ -1,4 +1,5 @@
 """Tests for localarchive.utils"""
+
 from pathlib import Path
 
 from localarchive.utils import is_supported, safe_filename, truncate

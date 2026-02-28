@@ -95,7 +95,9 @@ async def index(
     else:
         results = search_engine.recent(limit=page_limit, offset=offset, status=status or None)
         if status:
-            row = _db.conn.execute("SELECT COUNT(*) as cnt FROM documents WHERE status = ?", (status,)).fetchone()
+            row = _db.conn.execute(
+                "SELECT COUNT(*) as cnt FROM documents WHERE status = ?", (status,)
+            ).fetchone()
         else:
             row = _db.conn.execute("SELECT COUNT(*) as cnt FROM documents").fetchone()
         total = int(row["cnt"]) if row else len(results)
@@ -158,9 +160,9 @@ async def index(
         {cards}
     </main>
     <nav class="pager" aria-label="Pagination">
-      <a tabindex="0" aria-disabled="{str(not has_prev).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={max(0, offset-page_limit)}">Prev</a>
+      <a tabindex="0" aria-disabled="{str(not has_prev).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={max(0, offset - page_limit)}">Prev</a>
       <span>Showing {offset + 1 if total else 0} - {min(offset + page_limit, total)} of {total}</span>
-      <a tabindex="0" aria-disabled="{str(not has_next).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={offset+page_limit}">Next</a>
+      <a tabindex="0" aria-disabled="{str(not has_next).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&limit={page_limit}&offset={offset + page_limit}">Next</a>
     </nav>
 </body>
 </html>"""
@@ -174,11 +176,14 @@ async def document_detail(request: Request, doc_id: int):
         return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
 
     tags = ", ".join(escape(t) for t in doc.get("tags", [])) or "None"
-    fields_rows = "".join(
-        f"<tr><td>{escape(str(f.get('field_type', '')))}</td>"
-        f"<td>{escape(str(f.get('value', '')))}</td></tr>"
-        for f in doc.get("fields", [])
-    ) or "<tr><td colspan='2'>No extracted fields</td></tr>"
+    fields_rows = (
+        "".join(
+            f"<tr><td>{escape(str(f.get('field_type', '')))}</td>"
+            f"<td>{escape(str(f.get('value', '')))}</td></tr>"
+            for f in doc.get("fields", [])
+        )
+        or "<tr><td colspan='2'>No extracted fields</td></tr>"
+    )
     preview = escape((doc.get("ocr_text") or "")[:5000]).replace("\n", "<br>")
     status = escape(str(doc.get("status", "?")))
     csrf_token = _ensure_csrf_token(request)
@@ -215,7 +220,7 @@ async def document_detail(request: Request, doc_id: int):
     <form action="/documents/{doc_id}/tags" method="post" style="margin-top:0.75rem;">
         <label><strong>Update Tags:</strong></label><br>
         <input type="hidden" name="csrf_token" value="{csrf_token}">
-        <input type="text" name="tags" value="{escape(', '.join(doc.get('tags', [])))}" style="width:100%;max-width:480px;">
+        <input type="text" name="tags" value="{escape(", ".join(doc.get("tags", [])))}" style="width:100%;max-width:480px;">
         <button type="submit">Save Tags</button>
     </form>
     <h2>Extracted Fields</h2>
@@ -265,7 +270,7 @@ def _render_card(doc: dict) -> str:
     status = escape(str(doc.get("status", "?")))
     return f"""
     <div class="doc-card">
-        <h3><a href="/documents/{doc['id']}" tabindex="0">{escape(doc.get("filename", "Untitled"))}</a><span class="chip {status}">{status}</span></h3>
+        <h3><a href="/documents/{doc["id"]}" tabindex="0">{escape(doc.get("filename", "Untitled"))}</a><span class="chip {status}">{status}</span></h3>
         <p class="meta">ID: {doc["id"]} &middot; {escape(str(doc.get("file_type", "?")))} &middot; {escape(str(doc.get("ingested_at", "")))}</p>
         {preview_html}
     </div>"""

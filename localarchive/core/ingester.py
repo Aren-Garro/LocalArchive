@@ -69,7 +69,9 @@ class Ingester:
         console.print(f"[green]Ingested {len(doc_ids)} new documents.[/green]")
         return doc_ids
 
-    def ingest_files(self, files: list[Path], scan_cache: dict[str, dict] | None = None) -> list[int]:
+    def ingest_files(
+        self, files: list[Path], scan_cache: dict[str, dict] | None = None
+    ) -> list[int]:
         doc_ids = []
         now = int(time.time())
         for filepath in files:

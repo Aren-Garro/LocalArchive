@@ -1,4 +1,5 @@
 """Tests for localarchive.core.extractor"""
+
 from localarchive.core.extractor import extract_fields
 
 

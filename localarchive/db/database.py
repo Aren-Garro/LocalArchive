@@ -26,7 +26,9 @@ class Database:
 
     def initialize(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
-        self.conn.execute("INSERT INTO schema_version(version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_version)")
+        self.conn.execute(
+            "INSERT INTO schema_version(version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_version)"
+        )
         self._apply_migrations()
         self.conn.commit()
 
@@ -45,11 +47,15 @@ class Database:
         version = self._get_schema_version()
         if version < 1:
             if not self._has_column("documents", "updated_at"):
-                self.conn.execute("ALTER TABLE documents ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+                self.conn.execute(
+                    "ALTER TABLE documents ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"
+                )
             if not self._has_column("documents", "error_message"):
                 self.conn.execute("ALTER TABLE documents ADD COLUMN error_message TEXT DEFAULT ''")
             if not self._has_column("documents", "last_processed_at"):
-                self.conn.execute("ALTER TABLE documents ADD COLUMN last_processed_at TEXT DEFAULT ''")
+                self.conn.execute(
+                    "ALTER TABLE documents ADD COLUMN last_processed_at TEXT DEFAULT ''"
+                )
             self.conn.execute("UPDATE documents SET updated_at = ingested_at WHERE updated_at = ''")
             self._set_schema_version(1)
 
@@ -116,18 +122,26 @@ class Database:
 
         if version < 4:
             if not self._has_column("documents", "processing_attempts"):
-                self.conn.execute("ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0")
+                self.conn.execute(
+                    "ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0"
+                )
             if not self._has_column("documents", "last_error_at"):
                 self.conn.execute("ALTER TABLE documents ADD COLUMN last_error_at TEXT DEFAULT ''")
-            self.conn.execute("UPDATE documents SET processing_attempts = COALESCE(processing_attempts, 0)")
+            self.conn.execute(
+                "UPDATE documents SET processing_attempts = COALESCE(processing_attempts, 0)"
+            )
             self.conn.execute("UPDATE documents SET last_error_at = '' WHERE last_error_at IS NULL")
             self._set_schema_version(4)
 
         if version < 5:
             if not self._has_column("processing_runs", "checkpoint_doc_id"):
-                self.conn.execute("ALTER TABLE processing_runs ADD COLUMN checkpoint_doc_id INTEGER NOT NULL DEFAULT 0")
+                self.conn.execute(
+                    "ALTER TABLE processing_runs ADD COLUMN checkpoint_doc_id INTEGER NOT NULL DEFAULT 0"
+                )
             if not self._has_column("processing_runs", "aborted_reason"):
-                self.conn.execute("ALTER TABLE processing_runs ADD COLUMN aborted_reason TEXT DEFAULT ''")
+                self.conn.execute(
+                    "ALTER TABLE processing_runs ADD COLUMN aborted_reason TEXT DEFAULT ''"
+                )
             self.conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS backups (
@@ -184,7 +198,9 @@ class Database:
         doc["fields"] = self.get_fields(doc_id)
         return doc
 
-    def list_documents(self, status: str | None = None, limit: int = 100, offset: int = 0) -> list[dict]:
+    def list_documents(
+        self, status: str | None = None, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
         if status:
             rows = self.conn.execute(
                 "SELECT * FROM documents WHERE status = ? ORDER BY ingested_at DESC LIMIT ? OFFSET ?",
@@ -192,7 +208,8 @@ class Database:
             ).fetchall()
         else:
             rows = self.conn.execute(
-                "SELECT * FROM documents ORDER BY ingested_at DESC LIMIT ? OFFSET ?", (limit, offset),
+                "SELECT * FROM documents ORDER BY ingested_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -202,11 +219,12 @@ class Database:
             batch = self.list_documents(status=status, limit=batch_size, offset=offset)
             if not batch:
                 break
-            for doc in batch:
-                yield doc
+            yield from batch
             offset += len(batch)
 
-    def list_documents_for_reprocess(self, status: str, since: str | None = None, limit: int = 100) -> list[dict]:
+    def list_documents_for_reprocess(
+        self, status: str, since: str | None = None, limit: int = 100
+    ) -> list[dict]:
         if since:
             rows = self.conn.execute(
                 "SELECT * FROM documents WHERE status = ? AND COALESCE(last_processed_at, ingested_at) >= ? "
@@ -228,7 +246,9 @@ class Database:
         return [dict(r) for r in rows]
 
     def document_exists_by_hash(self, file_hash: str) -> bool:
-        row = self.conn.execute("SELECT 1 FROM documents WHERE file_hash = ?", (file_hash,)).fetchone()
+        row = self.conn.execute(
+            "SELECT 1 FROM documents WHERE file_hash = ?", (file_hash,)
+        ).fetchone()
         return row is not None
 
     def add_tag(self, doc_id: int, tag_name: str) -> None:
@@ -245,7 +265,9 @@ class Database:
         self.conn.execute("DELETE FROM document_tags WHERE document_id = ?", (doc_id,))
         for tag_name in normalized:
             self.conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag_name,))
-            tag_row = self.conn.execute("SELECT id FROM tags WHERE name = ?", (tag_name,)).fetchone()
+            tag_row = self.conn.execute(
+                "SELECT id FROM tags WHERE name = ?", (tag_name,)
+            ).fetchone()
             self.conn.execute(
                 "INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?, ?)",
                 (doc_id, tag_row["id"]),
@@ -415,7 +437,9 @@ class Database:
         )
         self.conn.commit()
 
-    def add_processing_event(self, run_id: int, event_type: str, message: str = "", document_id: int | None = None) -> None:
+    def add_processing_event(
+        self, run_id: int, event_type: str, message: str = "", document_id: int | None = None
+    ) -> None:
         self.conn.execute(
             "INSERT INTO processing_events(run_id, document_id, event_type, message, created_at) VALUES (?, ?, ?, ?, ?)",
             (run_id, document_id, event_type, message, timestamp_now()),
@@ -452,7 +476,9 @@ class Database:
         )
         self.conn.commit()
 
-    def record_backup(self, path: str, db_hash: str, archive_file_count: int, verified: bool) -> None:
+    def record_backup(
+        self, path: str, db_hash: str, archive_file_count: int, verified: bool
+    ) -> None:
         self.conn.execute(
             "INSERT OR REPLACE INTO backups(created_at, path, db_hash, archive_file_count, verified) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -483,7 +509,10 @@ class Database:
         return int(row["id"])
 
     def set_collection_rule(self, collection_id: int, rule_type: str, rule_value: str) -> None:
-        self.conn.execute("DELETE FROM collection_rules WHERE collection_id = ? AND rule_type = ?", (collection_id, rule_type))
+        self.conn.execute(
+            "DELETE FROM collection_rules WHERE collection_id = ? AND rule_type = ?",
+            (collection_id, rule_type),
+        )
         self.conn.execute(
             "INSERT INTO collection_rules(collection_id, rule_type, rule_value, created_at) VALUES (?, ?, ?, ?)",
             (collection_id, rule_type, rule_value, timestamp_now()),
@@ -494,10 +523,14 @@ class Database:
         if collection_id is None:
             self.conn.execute("DELETE FROM document_collections")
         else:
-            self.conn.execute("DELETE FROM document_collections WHERE collection_id = ?", (collection_id,))
+            self.conn.execute(
+                "DELETE FROM document_collections WHERE collection_id = ?", (collection_id,)
+            )
         self.conn.commit()
 
-    def assign_document_to_collection(self, doc_id: int, collection_id: int, score: float = 1.0) -> None:
+    def assign_document_to_collection(
+        self, doc_id: int, collection_id: int, score: float = 1.0
+    ) -> None:
         self.conn.execute(
             "INSERT OR REPLACE INTO document_collections(document_id, collection_id, score, assigned_at) VALUES (?, ?, ?, ?)",
             (doc_id, collection_id, score, timestamp_now()),
@@ -542,7 +575,9 @@ class Database:
             if year:
                 name = f"{by_year_prefix} {year}"
                 if name not in year_collections:
-                    year_collections[name] = self.upsert_collection(name, f"Documents associated with year {year}")
+                    year_collections[name] = self.upsert_collection(
+                        name, f"Documents associated with year {year}"
+                    )
                 self.assign_document_to_collection(doc["id"], year_collections[name], score=0.8)
                 assignments[name] += 1
 
@@ -581,14 +616,18 @@ class Database:
                 try:
                     actual_hash = file_hash(fpath)
                     if actual_hash != doc["file_hash"]:
-                        issues.append({"id": doc["id"], "issue": "hash_mismatch", "path": str(fpath)})
+                        issues.append(
+                            {"id": doc["id"], "issue": "hash_mismatch", "path": str(fpath)}
+                        )
                 except Exception:
                     issues.append({"id": doc["id"], "issue": "hash_error", "path": str(fpath)})
 
         docs_count = self.conn.execute("SELECT COUNT(*) as c FROM documents").fetchone()["c"]
         fts_count = self.conn.execute("SELECT COUNT(*) as c FROM documents_fts").fetchone()["c"]
         if int(docs_count) != int(fts_count):
-            issues.append({"id": None, "issue": "fts_mismatch", "path": f"{docs_count} vs {fts_count}"})
+            issues.append(
+                {"id": None, "issue": "fts_mismatch", "path": f"{docs_count} vs {fts_count}"}
+            )
             if repair:
                 self.conn.execute("INSERT INTO documents_fts(documents_fts) VALUES ('rebuild')")
                 self.conn.commit()

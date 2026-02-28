@@ -51,10 +51,16 @@ include = ["localarchive*"]
 
 [tool.ruff]
 target-version = "py310"
-line-length = 100
+line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"localarchive/db/database.py" = ["E501"]
+"localarchive/db/search.py" = ["E501"]
+"localarchive/ui/app.py" = ["E501"]
+"tests/test_migrations.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

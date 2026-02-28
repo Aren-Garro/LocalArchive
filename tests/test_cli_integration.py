@@ -321,7 +321,9 @@ def test_backup_list_prune_missing(monkeypatch):
 
     db = Database(config.db_path)
     db.initialize()
-    db.record_backup(path=str(tmp_path / "ghost.zip"), db_hash="", archive_file_count=0, verified=False)
+    db.record_backup(
+        path=str(tmp_path / "ghost.zip"), db_hash="", archive_file_count=0, verified=False
+    )
     db.close()
 
     runner = CliRunner()
@@ -346,7 +348,9 @@ def test_backup_list_missing_only(monkeypatch):
     db = Database(config.db_path)
     db.initialize()
     db.record_backup(path=str(present), db_hash="", archive_file_count=0, verified=False)
-    db.record_backup(path=str(tmp_path / "ghost.zip"), db_hash="", archive_file_count=0, verified=False)
+    db.record_backup(
+        path=str(tmp_path / "ghost.zip"), db_hash="", archive_file_count=0, verified=False
+    )
     db.close()
 
     runner = CliRunner()
@@ -406,7 +410,9 @@ def test_backup_restore_dry_run_summary(monkeypatch):
         zf.writestr("archive_data/new.txt", "new")
 
     runner = CliRunner()
-    result = runner.invoke(main, ["backup", "restore", "--path", str(backup_path), "--dry-run", "--json"])
+    result = runner.invoke(
+        main, ["backup", "restore", "--path", str(backup_path), "--dry-run", "--json"]
+    )
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["dry_run"] is True
@@ -465,7 +471,10 @@ def test_search_semantic_respects_config_gate(monkeypatch):
     config.search.enable_semantic = False
     monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
     # If hybrid path is called despite config gate, this test should fail.
-    monkeypatch.setattr("localarchive.cli.SearchEngine.search_hybrid", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not run hybrid")))
+    monkeypatch.setattr(
+        "localarchive.cli.SearchEngine.search_hybrid",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not run hybrid")),
+    )
 
     db = Database(config.db_path)
     db.initialize()
@@ -551,7 +560,9 @@ def test_process_parallel_workers_and_checkpoint(monkeypatch):
     db.close()
 
     runner = CliRunner()
-    result = runner.invoke(main, ["process", "--workers", "3", "--checkpoint-every", "1", "--extractor", "regex"])
+    result = runner.invoke(
+        main, ["process", "--workers", "3", "--checkpoint-every", "1", "--extractor", "regex"]
+    )
     assert result.exit_code == 0
     assert "Progress checkpoint" in result.output
 
@@ -688,7 +699,9 @@ def test_classify_tags_processed_documents(monkeypatch):
         status="processed",
         ocr_text="Invoice due amount total balance",
     )
-    db.insert_fields(doc_id, [{"field_type": "amount", "value": "$42.00", "start": 1, "raw_match": "$42.00"}])
+    db.insert_fields(
+        doc_id, [{"field_type": "amount", "value": "$42.00", "start": 1, "raw_match": "$42.00"}]
+    )
     db.close()
 
     runner = CliRunner()

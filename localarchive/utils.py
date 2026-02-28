@@ -5,7 +5,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SUPPORTED_EXTENSIONS = {
-    ".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp", ".gif",
+    ".pdf",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".tiff",
+    ".tif",
+    ".bmp",
+    ".webp",
+    ".gif",
 }
 
 
@@ -29,7 +37,7 @@ def timestamp_now() -> str:
 def truncate(text: str, max_length: int = 200) -> str:
     if len(text) <= max_length:
         return text
-    return text[:max_length - 3] + "..."
+    return text[: max_length - 3] + "..."
 
 
 def safe_filename(name: str) -> str:

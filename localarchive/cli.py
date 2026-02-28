@@ -1,6 +1,7 @@
 """
 LocalArchive CLI - main entry point.
-Commands: init, ingest, search, export, tag, process, classify, reprocess, watch, doctor, collections, timeline, audit, verify, backup, serve
+Commands: init, ingest, search, export, tag, process, classify, reprocess, watch,
+doctor, collections, timeline, audit, verify, backup, serve
 """
 
 import concurrent.futures
@@ -66,7 +67,9 @@ def get_db(config: Config) -> Database:
 
 
 @click.group()
-@click.option("--config", "config_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option(
+    "--config", "config_path", type=click.Path(dir_okay=False, path_type=Path), default=None
+)
 @click.option("--verbose", is_flag=True, help="Verbose diagnostics.")
 @click.option("--quiet", is_flag=True, help="Suppress non-error output.")
 @click.option("--no-color", is_flag=True, help="Disable colored output.")
@@ -135,7 +138,9 @@ def _copy_zip_member_limited(
         )
     next_total = int(limits["total"]) + file_size
     if next_total > BACKUP_RESTORE_MAX_TOTAL_BYTES:
-        raise CLIError("Backup restore failed: extracted payload exceeds safety limit.", exit_code=4)
+        raise CLIError(
+            "Backup restore failed: extracted payload exceeds safety limit.", exit_code=4
+        )
     dst.parent.mkdir(parents=True, exist_ok=True)
     copied = 0
     with zf.open(member, "r") as src, open(dst, "wb") as out:
@@ -265,7 +270,9 @@ def ingest(path: str, profile: str):
 @click.option("--vector-weight", default=0.3, type=float, help="Hybrid vector weight.")
 @click.option("--fuzzy", is_flag=True, help="Enable fuzzy OCR-tolerant fallback search.")
 @click.option("--fuzzy-threshold", default=None, type=float, help="Fuzzy match threshold (0-1).")
-@click.option("--fuzzy-max-candidates", default=None, type=int, help="Max fuzzy candidates to score.")
+@click.option(
+    "--fuzzy-max-candidates", default=None, type=int, help="Max fuzzy candidates to score."
+)
 @click.option("--explain-ranking", is_flag=True, help="Show ranking diagnostics for each result.")
 @click.option("--json", "as_json", is_flag=True, help="Emit results as JSON.")
 def search(
@@ -307,9 +314,13 @@ def search(
         results = engine.search(query, limit=max_results, tag=tag, file_type=file_type)
     fuzzy_enabled = fuzzy or config.search.enable_fuzzy
     if fuzzy_enabled:
-        threshold = fuzzy_threshold if fuzzy_threshold is not None else config.search.fuzzy_threshold
+        threshold = (
+            fuzzy_threshold if fuzzy_threshold is not None else config.search.fuzzy_threshold
+        )
         max_candidates = (
-            fuzzy_max_candidates if fuzzy_max_candidates is not None else config.search.fuzzy_max_candidates
+            fuzzy_max_candidates
+            if fuzzy_max_candidates is not None
+            else config.search.fuzzy_max_candidates
         )
         _validate_threshold("fuzzy-threshold", threshold)
         _validate_limit(max_candidates)
@@ -333,13 +344,17 @@ def search(
         else:
             results = fuzzy_results
     if semantic and not config.search.enable_semantic:
-        console.print("[yellow]Semantic search is disabled in config.search.enable_semantic; using BM25 only.[/yellow]")
+        console.print(
+            "[yellow]Semantic search is disabled in config.search.enable_semantic; using BM25 only.[/yellow]"
+        )
     if semantic:
         console.print(
             f"[dim]Hybrid search request: bm25_weight={bm25_weight:.2f}, vector_weight={vector_weight:.2f}[/dim]"
         )
     if fuzzy_enabled:
-        console.print(f"[dim]Fuzzy search enabled: threshold={threshold:.2f} candidates={max_candidates}[/dim]")
+        console.print(
+            f"[dim]Fuzzy search enabled: threshold={threshold:.2f} candidates={max_candidates}[/dim]"
+        )
     if not results:
         if as_json:
             _emit_json(
@@ -353,7 +368,9 @@ def search(
             )
         else:
             console.print("[yellow]No results found.[/yellow]")
-            console.print("[dim]Hint: try `localarchive search \"<term>\" --fuzzy` or broaden filters.[/dim]")
+            console.print(
+                '[dim]Hint: try `localarchive search "<term>" --fuzzy` or broaden filters.[/dim]'
+            )
         db.close()
         return
     if as_json:
@@ -390,7 +407,13 @@ def search(
     table.add_column("Preview", max_width=50)
     for doc in results:
         preview = (doc.get("ocr_text") or "")[:80]
-        table.add_row(str(doc["id"]), doc["filename"], doc.get("file_type", "?"), doc.get("ingested_at", ""), preview)
+        table.add_row(
+            str(doc["id"]),
+            doc["filename"],
+            doc.get("file_type", "?"),
+            doc.get("ingested_at", ""),
+            preview,
+        )
     console.print(table)
     if explain_ranking:
         rank_table = Table(title="Ranking Explanation")
@@ -417,6 +440,7 @@ def search(
 def export(query: str, fmt: str, output: str):
     """Export documents to CSV, JSON, or Markdown."""
     from localarchive.core.exporter import export_csv, export_json, export_markdown
+
     config = get_config()
     db = get_db(config)
     engine = SearchEngine(db)
@@ -454,7 +478,9 @@ def tag(doc_id: int, tags: tuple[str]):
 
 @main.command()
 @click.option("--limit", default=None, type=int, help="Max documents to process")
-@click.option("--workers", type=int, default=None, help="Worker count (defaults to runtime.max_workers).")
+@click.option(
+    "--workers", type=int, default=None, help="Worker count (defaults to runtime.max_workers)."
+)
 @click.option(
     "--commit-batch-size",
     type=int,
@@ -477,7 +503,9 @@ def tag(doc_id: int, tags: tuple[str]):
 @click.option("--dry-run", is_flag=True, help="Preview pending IDs and exit without processing.")
 @click.option("--max-errors", type=int, default=None, help="Abort run after this many errors.")
 @click.option("--resume", is_flag=True, help="Resume from latest processing checkpoint.")
-@click.option("--from-run", type=int, default=None, help="Resume from a specific processing run ID.")
+@click.option(
+    "--from-run", type=int, default=None, help="Resume from a specific processing run ID."
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit process run summary as JSON.")
 def process(
     limit: int | None,
@@ -498,16 +526,25 @@ def process(
         get_ocr_engine,
         pdf_to_images,
     )
+
     config = get_config()
     max_docs = limit if limit is not None else config.processing.default_limit
     _validate_limit(max_docs)
     worker_count = workers if workers is not None else config.runtime.max_workers
     _validate_limit(worker_count)
-    commit_size = commit_batch_size if commit_batch_size is not None else config.processing.commit_batch_size
+    commit_size = (
+        commit_batch_size if commit_batch_size is not None else config.processing.commit_batch_size
+    )
     _validate_limit(commit_size)
-    checkpoint_size = checkpoint_every if checkpoint_every is not None else config.reliability.checkpoint_batch_size
+    checkpoint_size = (
+        checkpoint_every
+        if checkpoint_every is not None
+        else config.reliability.checkpoint_batch_size
+    )
     _validate_limit(checkpoint_size)
-    max_error_budget = max_errors if max_errors is not None else config.processing.max_errors_per_run
+    max_error_budget = (
+        max_errors if max_errors is not None else config.processing.max_errors_per_run
+    )
     _validate_limit(max_error_budget)
     db = get_db(config)
     _run_integrity_check_if_enabled(config, db, "process")
@@ -526,7 +563,9 @@ def process(
             f"[dim]Resuming from run {resume_run.get('id')} with checkpoint_doc_id={after_doc_id}[/dim]"
         )
     elif resume or from_run is not None:
-        console.print("[yellow]No checkpointed run found; starting from earliest pending document.[/yellow]")
+        console.print(
+            "[yellow]No checkpointed run found; starting from earliest pending document.[/yellow]"
+        )
     pending = db.list_documents_for_processing(limit=max_docs, after_doc_id=after_doc_id)
     if not pending:
         if as_json:
@@ -559,7 +598,9 @@ def process(
                 }
             )
         else:
-            console.print(f"[yellow]Dry run:[/yellow] would process {len(doc_ids)} document(s): {doc_ids}")
+            console.print(
+                f"[yellow]Dry run:[/yellow] would process {len(doc_ids)} document(s): {doc_ids}"
+            )
         db.close()
         return
     mode = extractor_mode or config.extraction.strategy
@@ -578,7 +619,9 @@ def process(
     aborted_reason = ""
     console.print(f"Processing [bold]{len(pending)}[/bold] documents...\n")
     if config.runtime.fail_fast and worker_count > 1:
-        console.print("[yellow]Fail-fast enabled; forcing single-worker processing for deterministic stop behavior.[/yellow]")
+        console.print(
+            "[yellow]Fail-fast enabled; forcing single-worker processing for deterministic stop behavior.[/yellow]"
+        )
         worker_count = 1
     thread_local = threading.local()
 
@@ -610,10 +653,20 @@ def process(
                 full_text = " ".join(e["text"] for e in entries)
             fields = extract_fields(full_text, mode=mode, config=config.extraction)
             field_dicts = [
-                {"field_type": f.field_type, "value": f.value, "raw_match": f.raw_match, "start": f.start}
+                {
+                    "field_type": f.field_type,
+                    "value": f.value,
+                    "raw_match": f.raw_match,
+                    "start": f.start,
+                }
                 for f in fields
             ]
-            return {"doc_id": doc["id"], "filename": doc["filename"], "full_text": full_text, "fields": field_dicts}
+            return {
+                "doc_id": doc["id"],
+                "filename": doc["filename"],
+                "full_text": full_text,
+                "fields": field_dicts,
+            }
         finally:
             if config.runtime.cleanup_temp_files:
                 for img_path in temp_images:
@@ -629,7 +682,9 @@ def process(
             db.update_processed_documents_batch(success_buffer)
             success_buffer.clear()
         if error_buffer:
-            db.record_processing_errors_batch(error_buffer, max_retries=config.reliability.max_retries)
+            db.record_processing_errors_batch(
+                error_buffer, max_retries=config.reliability.max_retries
+            )
             error_buffer.clear()
         if event_buffer:
             db.add_processing_events_batch(event_buffer)
@@ -676,7 +731,9 @@ def process(
                 }
             )
             processed_count += 1
-            console.print(f"  -> {filename}... [green]done[/green] ({len(result['fields'])} fields)")
+            console.print(
+                f"  -> {filename}... [green]done[/green] ({len(result['fields'])} fields)"
+            )
         completed_count += 1
         if completed_count % checkpoint_size == 0:
             console.print(
@@ -758,7 +815,9 @@ def process(
 
 @main.command()
 @click.option("--limit", default=200, type=int, help="Max processed documents to classify.")
-@click.option("--retag", is_flag=True, help="Replace existing category tags with new classification tag.")
+@click.option(
+    "--retag", is_flag=True, help="Replace existing category tags with new classification tag."
+)
 @click.option("--explain", is_flag=True, help="Show rule hits that drove classification.")
 def classify(limit: int, retag: bool, explain: bool):
     """Auto-classify processed documents and apply category tags."""
@@ -831,7 +890,9 @@ def reprocess(status: str, since: str | None, limit: int, dry_run: bool):
         return
     doc_ids = [d["id"] for d in docs]
     if dry_run:
-        console.print(f"[yellow]Dry run:[/yellow] would reprocess {len(doc_ids)} document(s): {doc_ids}")
+        console.print(
+            f"[yellow]Dry run:[/yellow] would reprocess {len(doc_ids)} document(s): {doc_ids}"
+        )
         db.close()
         return
     updated = db.mark_for_reprocess(doc_ids)
@@ -843,7 +904,9 @@ def reprocess(status: str, since: str | None, limit: int, dry_run: bool):
 @click.argument("path", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--interval", type=int, default=None, help="Polling interval in seconds.")
 @click.option("--once", is_flag=True, help="Run a single scan cycle and exit.")
-@click.option("--fast-scan/--no-fast-scan", default=True, help="Skip unchanged files between scan cycles.")
+@click.option(
+    "--fast-scan/--no-fast-scan", default=True, help="Skip unchanged files between scan cycles."
+)
 def watch(path: Path, interval: int | None, once: bool, fast_scan: bool):
     """Watch a folder and ingest newly discovered files."""
     config = get_config()
@@ -877,16 +940,40 @@ def doctor(as_json: bool):
         checks.append((name, "PASS" if ok else "FAIL", detail))
 
     _check("config_path", True, str(_runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH))
-    _check("archive_dir_writable", config.archive_dir.exists() or config.archive_dir.parent.exists(), str(config.archive_dir))
+    _check(
+        "archive_dir_writable",
+        config.archive_dir.exists() or config.archive_dir.parent.exists(),
+        str(config.archive_dir),
+    )
     _check("db_parent_writable", config.db_path.parent.exists(), str(config.db_path.parent))
-    _check("tmp_dir_writable", config.runtime.tmp_dir.exists() or config.runtime.tmp_dir.parent.exists(), str(config.runtime.tmp_dir))
-    _check("fastapi_installed", importlib.util.find_spec("fastapi") is not None, "optional for `serve`")
-    _check("uvicorn_installed", importlib.util.find_spec("uvicorn") is not None, "optional for `serve`")
-    _check("pymupdf_installed", importlib.util.find_spec("fitz") is not None, "needed for PDF processing")
+    _check(
+        "tmp_dir_writable",
+        config.runtime.tmp_dir.exists() or config.runtime.tmp_dir.parent.exists(),
+        str(config.runtime.tmp_dir),
+    )
+    _check(
+        "fastapi_installed", importlib.util.find_spec("fastapi") is not None, "optional for `serve`"
+    )
+    _check(
+        "uvicorn_installed", importlib.util.find_spec("uvicorn") is not None, "optional for `serve`"
+    )
+    _check(
+        "pymupdf_installed",
+        importlib.util.find_spec("fitz") is not None,
+        "needed for PDF processing",
+    )
     if config.ocr.engine == "easyocr":
-        _check("easyocr_installed", importlib.util.find_spec("easyocr") is not None, "required by OCR config")
+        _check(
+            "easyocr_installed",
+            importlib.util.find_spec("easyocr") is not None,
+            "required by OCR config",
+        )
     else:
-        _check("paddleocr_installed", importlib.util.find_spec("paddleocr") is not None, "required by OCR config")
+        _check(
+            "paddleocr_installed",
+            importlib.util.find_spec("paddleocr") is not None,
+            "required by OCR config",
+        )
 
     if as_json:
         payload = {
@@ -929,8 +1016,9 @@ def collections_auto_build(rules: str):
     db = get_db(config)
     summary = db.auto_build_default_collections()
     db.close()
+    assignment_total = sum(summary["assignments"].values())
     console.print(
-        f"[green]Built collections:[/green] {summary['collections']} with {sum(summary['assignments'].values())} assignments"
+        f"[green]Built collections:[/green] {summary['collections']} with {assignment_total} assignments"
     )
 
 
@@ -1016,7 +1104,14 @@ def verify(full_verify: bool, as_json: bool):
     breakdown = _issue_breakdown(report["issues"])
     recommendations = _issue_recommendations(breakdown)
     if as_json:
-        _emit_json({"mode": level, **report, "issue_breakdown": breakdown, "recommendations": recommendations})
+        _emit_json(
+            {
+                "mode": level,
+                **report,
+                "issue_breakdown": breakdown,
+                "recommendations": recommendations,
+            }
+        )
         if report["issues"]:
             raise CLIError("Verify found issues.", exit_code=4)
         return
@@ -1049,7 +1144,9 @@ def backup():
 @backup.command("list")
 @click.option("--limit", default=20, type=int, help="Max backups to show.")
 @click.option("--json", "as_json", is_flag=True, help="Emit backups as JSON.")
-@click.option("--prune-missing", is_flag=True, help="Remove records whose backup files no longer exist.")
+@click.option(
+    "--prune-missing", is_flag=True, help="Remove records whose backup files no longer exist."
+)
 @click.option("--missing-only", is_flag=True, help="Only show backups missing on disk.")
 def backup_list(limit: int, as_json: bool, prune_missing: bool, missing_only: bool):
     """List tracked backups."""
@@ -1092,9 +1189,13 @@ def backup_list(limit: int, as_json: bool, prune_missing: bool, missing_only: bo
 
 
 @backup.command("create")
-@click.option("--path", "backup_path", type=click.Path(dir_okay=False, path_type=Path), required=True)
+@click.option(
+    "--path", "backup_path", type=click.Path(dir_okay=False, path_type=Path), required=True
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit backup summary as JSON.")
-@click.option("--dry-run", is_flag=True, help="Show backup summary without writing files or DB records.")
+@click.option(
+    "--dry-run", is_flag=True, help="Show backup summary without writing files or DB records."
+)
 def backup_create(backup_path: Path, as_json: bool, dry_run: bool):
     """Create a backup archive including DB and config."""
     config = get_config()
@@ -1132,7 +1233,10 @@ def backup_create(backup_path: Path, as_json: bool, dry_run: bool):
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path = config.runtime.tmp_dir / f"archive-snapshot-{uuid4().hex}.db"
     if config.db_path.exists():
-        with sqlite3.connect(str(config.db_path)) as src, sqlite3.connect(str(snapshot_path)) as dst:
+        with (
+            sqlite3.connect(str(config.db_path)) as src,
+            sqlite3.connect(str(snapshot_path)) as dst,
+        ):
             src.backup(dst)
     with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         if snapshot_path.exists():
@@ -1142,7 +1246,9 @@ def backup_create(backup_path: Path, as_json: bool, dry_run: bool):
         if config.archive_dir.exists():
             for p in config.archive_dir.rglob("*"):
                 if p.is_file():
-                    zf.write(p, arcname=str(Path("archive_data") / p.relative_to(config.archive_dir)))
+                    zf.write(
+                        p, arcname=str(Path("archive_data") / p.relative_to(config.archive_dir))
+                    )
                     archive_file_count += 1
     db_hash = ""
     verified = False
@@ -1153,7 +1259,9 @@ def backup_create(backup_path: Path, as_json: bool, dry_run: bool):
         except Exception:
             verified = False
     db = get_db(config)
-    db.record_backup(str(backup_path), db_hash=db_hash, archive_file_count=archive_file_count, verified=verified)
+    db.record_backup(
+        str(backup_path), db_hash=db_hash, archive_file_count=archive_file_count, verified=verified
+    )
     backups = db.list_backups(limit=1000)
     pruned_count = 0
     for old in backups[keep:]:
@@ -1186,9 +1294,15 @@ def backup_create(backup_path: Path, as_json: bool, dry_run: bool):
 
 
 @backup.command("restore")
-@click.option("--path", "backup_path", type=click.Path(dir_okay=False, path_type=Path), required=False)
-@click.option("--latest", "use_latest", is_flag=True, help="Restore from the newest tracked backup record.")
-@click.option("--dry-run", is_flag=True, help="Show what would be restored without modifying local files.")
+@click.option(
+    "--path", "backup_path", type=click.Path(dir_okay=False, path_type=Path), required=False
+)
+@click.option(
+    "--latest", "use_latest", is_flag=True, help="Restore from the newest tracked backup record."
+)
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be restored without modifying local files."
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit restore summary as JSON.")
 def backup_restore(backup_path: Path | None, use_latest: bool, dry_run: bool, as_json: bool):
     """Restore DB and archive data from a backup archive."""
@@ -1202,7 +1316,9 @@ def backup_restore(backup_path: Path | None, use_latest: bool, dry_run: bool, as
         rows = db.list_backups(limit=1)
         db.close()
         if not rows:
-            raise CLIError("No tracked backups found. Create one with `backup create` first.", exit_code=2)
+            raise CLIError(
+                "No tracked backups found. Create one with `backup create` first.", exit_code=2
+            )
         selected = Path(str(rows[0].get("path", "")))
         if not selected.exists():
             raise CLIError(
@@ -1385,8 +1501,11 @@ def serve(host: str, port: int):
     try:
         import uvicorn
     except ImportError as exc:
-        raise CLIError("Missing dependency `uvicorn`. Install UI dependencies.", exit_code=3) from exc
+        raise CLIError(
+            "Missing dependency `uvicorn`. Install UI dependencies.", exit_code=3
+        ) from exc
     from localarchive.ui.app import create_app
+
     config = get_config()
     config.ensure_dirs()
     startup_db = get_db(config)
@@ -1397,6 +1516,7 @@ def serve(host: str, port: int):
     console.print(f"[bold]LocalArchive UI[/bold] -> http://{h}:{p}")
     create_app(config)
     from localarchive.ui.app import app as fastapi_app
+
     uvicorn.run(fastapi_app, host=h, port=p, log_level="warning")
 
 

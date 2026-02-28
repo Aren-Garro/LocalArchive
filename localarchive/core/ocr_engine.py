@@ -29,6 +29,7 @@ class PaddleOCREngine(BaseOCR):
     def engine(self):
         if self._engine is None:
             from paddleocr import PaddleOCR
+
             self._engine = PaddleOCR(
                 use_angle_cls=True,
                 lang=self.config.languages[0] if self.config.languages else "en",
@@ -56,6 +57,7 @@ class EasyOCREngine(BaseOCR):
     def reader(self):
         if self._reader is None:
             import easyocr
+
             self._reader = easyocr.Reader(self.config.languages or ["en"], gpu=False)
         return self._reader
 
@@ -77,10 +79,13 @@ def get_ocr_engine(config: OCRConfig) -> BaseOCR:
 def pdf_to_images(pdf_path: Path, dpi: int = 200, tmp_dir: Path | None = None) -> list[Path]:
     """Convert each page of a PDF to a temporary PNG image."""
     import tempfile
+
     try:
         import fitz  # PyMuPDF
     except ImportError as exc:
-        raise RuntimeError("PyMuPDF is required for PDF image conversion. Install `pymupdf`.") from exc
+        raise RuntimeError(
+            "PyMuPDF is required for PDF image conversion. Install `pymupdf`."
+        ) from exc
     doc = fitz.open(str(pdf_path))
     image_paths = []
     temp_root = tmp_dir if tmp_dir else None
@@ -108,7 +113,9 @@ def extract_text_from_pdf_native(pdf_path: Path) -> str:
     try:
         import fitz  # PyMuPDF
     except ImportError as exc:
-        raise RuntimeError("PyMuPDF is required for native PDF extraction. Install `pymupdf`.") from exc
+        raise RuntimeError(
+            "PyMuPDF is required for native PDF extraction. Install `pymupdf`."
+        ) from exc
     doc = fitz.open(str(pdf_path))
     text = ""
     for page in doc:
