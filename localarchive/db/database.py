@@ -165,6 +165,16 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def iter_documents(self, batch_size: int = 1000, status: str | None = None):
+        offset = 0
+        while True:
+            batch = self.list_documents(status=status, limit=batch_size, offset=offset)
+            if not batch:
+                break
+            for doc in batch:
+                yield doc
+            offset += len(batch)
+
     def list_documents_for_reprocess(self, status: str, since: str | None = None, limit: int = 100) -> list[dict]:
         if since:
             rows = self.conn.execute(
@@ -325,7 +335,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def auto_build_default_collections(self) -> dict:
-        docs = self.list_documents(limit=100000)
+        docs = list(self.iter_documents(batch_size=1000))
         research_id = self.upsert_collection("Research PDFs", "All ingested PDF research documents")
         review_id = self.upsert_collection("Needs Review", "Documents requiring manual review")
         by_year_prefix = "By Year:"
@@ -384,8 +394,7 @@ class Database:
     def audit_verify(self, repair: bool = False) -> dict:
         issues = []
         checked = 0
-        docs = self.list_documents(limit=100000)
-        for doc in docs:
+        for doc in self.iter_documents(batch_size=1000):
             checked += 1
             fpath = Path(doc["filepath"])
             if not fpath.exists():

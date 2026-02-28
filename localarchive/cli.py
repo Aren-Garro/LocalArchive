@@ -7,7 +7,11 @@ import click
 import importlib.util
 import zipfile
 import shutil
+import sqlite3
+import tempfile
+from uuid import uuid4
 from pathlib import Path
+from pathlib import PurePosixPath
 from rich.console import Console
 from rich.table import Table
 from localarchive.config import Config, DEFAULT_CONFIG_PATH
@@ -143,7 +147,17 @@ def search(
         console.print("[yellow]`--type` is deprecated. Use `--file-type`.[/yellow]")
     db = get_db(config)
     engine = SearchEngine(db)
-    results = engine.search(query, limit=max_results, tag=tag, file_type=file_type)
+    if semantic:
+        results = engine.search_hybrid(
+            query,
+            limit=max_results,
+            tag=tag,
+            file_type=file_type,
+            bm25_weight=bm25_weight,
+            vector_weight=vector_weight,
+        )
+    else:
+        results = engine.search(query, limit=max_results, tag=tag, file_type=file_type)
     if semantic and not config.search.enable_semantic:
         console.print("[yellow]Semantic search is disabled in config.search.enable_semantic; using BM25 only.[/yellow]")
     if semantic:
@@ -452,15 +466,24 @@ def backup_create(backup_path: Path):
     config.ensure_dirs()
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
+    snapshot_path = config.runtime.tmp_dir / f"archive-snapshot-{uuid4().hex}.db"
+    if config.db_path.exists():
+        with sqlite3.connect(str(config.db_path)) as src, sqlite3.connect(str(snapshot_path)) as dst:
+            src.backup(dst)
     with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        if config.db_path.exists():
-            zf.write(config.db_path, arcname="archive.db")
+        if snapshot_path.exists():
+            zf.write(snapshot_path, arcname="archive.db")
         if cfg_path.exists():
             zf.write(cfg_path, arcname="config.toml")
         if config.archive_dir.exists():
             for p in config.archive_dir.rglob("*"):
                 if p.is_file():
                     zf.write(p, arcname=str(Path("archive_data") / p.relative_to(config.archive_dir)))
+    try:
+        snapshot_path.unlink(missing_ok=True)
+    except PermissionError:
+        # On Windows, temporary file handles can linger briefly after zip write.
+        pass
     console.print(f"[green]Backup created:[/green] {backup_path}")
 
 
@@ -471,22 +494,50 @@ def backup_restore(backup_path: Path):
     config = get_config()
     config.ensure_dirs()
     cfg_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
+    staging_dir = Path(tempfile.mkdtemp(prefix="restore-", dir=str(config.runtime.tmp_dir)))
     with zipfile.ZipFile(backup_path, "r") as zf:
         members = set(zf.namelist())
+        for name in members:
+            posix = PurePosixPath(name)
+            if posix.is_absolute() or ".." in posix.parts:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                raise CLIError(f"Unsafe backup entry path: {name}", exit_code=2)
         if "archive.db" in members:
-            zf.extract("archive.db", path=backup_path.parent)
-            shutil.move(str(backup_path.parent / "archive.db"), str(config.db_path))
+            with zf.open("archive.db", "r") as src, open(staging_dir / "archive.db", "wb") as out:
+                out.write(src.read())
         if "config.toml" in members:
-            cfg_path.parent.mkdir(parents=True, exist_ok=True)
-            zf.extract("config.toml", path=backup_path.parent)
-            shutil.move(str(backup_path.parent / "config.toml"), str(cfg_path))
+            with zf.open("config.toml", "r") as src, open(staging_dir / "config.toml", "wb") as out:
+                out.write(src.read())
         for name in members:
             if name.startswith("archive_data/"):
-                rel = Path(name).relative_to("archive_data")
-                dest = config.archive_dir / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(name, "r") as src, open(dest, "wb") as out:
+                rel = Path(*PurePosixPath(name).parts[1:])
+                staged = staging_dir / "archive_data" / rel
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(name, "r") as src, open(staged, "wb") as out:
                     out.write(src.read())
+
+    staged_db = staging_dir / "archive.db"
+    if staged_db.exists():
+        config.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if config.db_path.exists():
+            config.db_path.unlink()
+        shutil.move(str(staged_db), str(config.db_path))
+    staged_cfg = staging_dir / "config.toml"
+    if staged_cfg.exists():
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        if cfg_path.exists():
+            cfg_path.unlink()
+        shutil.move(str(staged_cfg), str(cfg_path))
+    staged_archive_root = staging_dir / "archive_data"
+    if staged_archive_root.exists():
+        for staged in staged_archive_root.rglob("*"):
+            if not staged.is_file():
+                continue
+            rel = staged.relative_to(staged_archive_root)
+            dest = config.archive_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(staged), str(dest))
+    shutil.rmtree(staging_dir, ignore_errors=True)
     console.print(f"[green]Backup restored from:[/green] {backup_path}")
 
 

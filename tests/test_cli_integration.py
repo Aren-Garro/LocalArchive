@@ -3,6 +3,7 @@
 import uuid
 import types
 import sys
+import zipfile
 from pathlib import Path
 from click.testing import CliRunner
 
@@ -209,3 +210,17 @@ def test_collections_timeline_backup_and_audit(monkeypatch):
 
     result = runner.invoke(main, ["audit"])
     assert result.exit_code in (0, 4)
+
+
+def test_backup_restore_rejects_unsafe_paths(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-unsafe-backup")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    bad_zip = tmp_path / "bad.zip"
+    with zipfile.ZipFile(bad_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("archive_data/../evil.txt", "bad")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["backup", "restore", "--path", str(bad_zip)])
+    assert result.exit_code == 2

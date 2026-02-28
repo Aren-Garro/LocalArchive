@@ -110,3 +110,49 @@ def test_collections_and_audit():
     audit = db.audit_verify()
     assert isinstance(audit["issues"], list)
     db.close()
+
+
+def test_iter_documents_not_capped():
+    db = _get_test_db()
+    for i in range(5):
+        db.insert_document(
+            filename=f"doc{i}.pdf",
+            filepath=f"/tmp/doc{i}.pdf",
+            file_hash=f"h{i}",
+            file_type="pdf",
+            file_size=1,
+            ingested_at=f"2026-01-0{i+1}T00:00:00Z",
+            status="processed",
+        )
+    docs = list(db.iter_documents(batch_size=2))
+    db.close()
+    assert len(docs) == 5
+
+
+def test_hybrid_search_returns_scores():
+    db = _get_test_db()
+    db.insert_document(
+        filename="alpha.pdf",
+        filepath="/tmp/alpha.pdf",
+        file_hash="hybrid1",
+        file_type="pdf",
+        file_size=1,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="Graph neural networks and chemistry",
+    )
+    db.insert_document(
+        filename="beta.pdf",
+        filepath="/tmp/beta.pdf",
+        file_hash="hybrid2",
+        file_type="pdf",
+        file_size=1,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="Completely unrelated content",
+    )
+    search = SearchEngine(db)
+    results = search.search_hybrid("graph neural", limit=5, bm25_weight=0.5, vector_weight=0.5)
+    db.close()
+    assert results
+    assert "hybrid_score" in results[0]

@@ -1,5 +1,6 @@
 """Full-text search engine using SQLite FTS5."""
 
+import re
 from localarchive.db.database import Database
 
 
@@ -28,6 +29,57 @@ class SearchEngine:
         params.extend([limit, offset])
         rows = self.db.conn.execute(base_query, params).fetchall()
         return [dict(r) for r in rows]
+
+    def search_hybrid(
+        self,
+        query: str,
+        limit: int = 20,
+        offset: int = 0,
+        tag: str | None = None,
+        file_type: str | None = None,
+        status: str | None = None,
+        bm25_weight: float = 0.7,
+        vector_weight: float = 0.3,
+    ) -> list[dict]:
+        """
+        Hybrid ranking without external vector dependencies.
+        Combines normalized BM25 rank from FTS with semantic-proxy token overlap.
+        """
+        candidates = self.search(
+            query,
+            limit=max(limit * 5, 50),
+            offset=offset,
+            tag=tag,
+            file_type=file_type,
+            status=status,
+        )
+        if not candidates:
+            return []
+        tokens = [t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 1]
+        bm25_vals = [float(doc.get("rank", 0.0)) for doc in candidates]
+        min_rank = min(bm25_vals)
+        max_rank = max(bm25_vals)
+
+        scored = []
+        for doc in candidates:
+            rank_val = float(doc.get("rank", 0.0))
+            if max_rank == min_rank:
+                bm25_norm = 1.0
+            else:
+                bm25_norm = 1.0 - ((rank_val - min_rank) / (max_rank - min_rank))
+            haystack = f"{doc.get('filename', '')} {doc.get('ocr_text', '')}".lower()
+            if not tokens:
+                semantic_proxy = 0.0
+            else:
+                hit = sum(1 for t in set(tokens) if t in haystack)
+                semantic_proxy = hit / len(set(tokens))
+            score = (bm25_weight * bm25_norm) + (vector_weight * semantic_proxy)
+            row = dict(doc)
+            row["hybrid_score"] = round(score, 6)
+            scored.append(row)
+
+        scored.sort(key=lambda d: d["hybrid_score"], reverse=True)
+        return scored[:limit]
 
     def count(self, query: str, status: str | None = None) -> int:
         if status:
