@@ -44,158 +44,159 @@ class Database:
         rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
         return any(r["name"] == column for r in rows)
 
+    def _migrate_v1(self) -> None:
+        if not self._has_column("documents", "updated_at"):
+            self.conn.execute("ALTER TABLE documents ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+        if not self._has_column("documents", "error_message"):
+            self.conn.execute("ALTER TABLE documents ADD COLUMN error_message TEXT DEFAULT ''")
+        if not self._has_column("documents", "last_processed_at"):
+            self.conn.execute("ALTER TABLE documents ADD COLUMN last_processed_at TEXT DEFAULT ''")
+        self.conn.execute("UPDATE documents SET updated_at = ingested_at WHERE updated_at = ''")
+
+    def _migrate_v2(self) -> None:
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_extracted_fields_dedupe "
+            "ON extracted_fields(document_id, field_type, value, position)"
+        )
+
+    def _migrate_v3(self) -> None:
+        self.conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS collections (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL UNIQUE,
+                description TEXT DEFAULT '',
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS collection_rules (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+                rule_type     TEXT NOT NULL,
+                rule_value    TEXT NOT NULL,
+                created_at    TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS document_collections (
+                document_id    INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                collection_id  INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+                score          REAL NOT NULL DEFAULT 1.0,
+                assigned_at    TEXT NOT NULL,
+                PRIMARY KEY (document_id, collection_id)
+            );
+            CREATE TABLE IF NOT EXISTS processing_runs (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at    TEXT NOT NULL,
+                ended_at      TEXT DEFAULT '',
+                status        TEXT NOT NULL DEFAULT 'running',
+                engine        TEXT DEFAULT '',
+                extractor     TEXT DEFAULT '',
+                processed     INTEGER NOT NULL DEFAULT 0,
+                errors        INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS processing_events (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id        INTEGER NOT NULL REFERENCES processing_runs(id) ON DELETE CASCADE,
+                document_id   INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+                event_type    TEXT NOT NULL,
+                message       TEXT DEFAULT '',
+                created_at    TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS document_embeddings (
+                document_id    INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                model          TEXT NOT NULL,
+                vector_blob    BLOB NOT NULL,
+                created_at     TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_document_collections_collection
+                ON document_collections(collection_id);
+            """
+        )
+
+    def _migrate_v4(self) -> None:
+        if not self._has_column("documents", "processing_attempts"):
+            self.conn.execute(
+                "ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0"
+            )
+        if not self._has_column("documents", "last_error_at"):
+            self.conn.execute("ALTER TABLE documents ADD COLUMN last_error_at TEXT DEFAULT ''")
+        self.conn.execute("UPDATE documents SET processing_attempts = COALESCE(processing_attempts, 0)")
+        self.conn.execute("UPDATE documents SET last_error_at = '' WHERE last_error_at IS NULL")
+
+    def _migrate_v5(self) -> None:
+        if not self._has_column("processing_runs", "checkpoint_doc_id"):
+            self.conn.execute(
+                "ALTER TABLE processing_runs ADD COLUMN checkpoint_doc_id INTEGER NOT NULL DEFAULT 0"
+            )
+        if not self._has_column("processing_runs", "aborted_reason"):
+            self.conn.execute(
+                "ALTER TABLE processing_runs ADD COLUMN aborted_reason TEXT DEFAULT ''"
+            )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS backups (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at          TEXT NOT NULL,
+                path                TEXT NOT NULL UNIQUE,
+                db_hash             TEXT DEFAULT '',
+                archive_file_count  INTEGER NOT NULL DEFAULT 0,
+                verified            INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+
+    def _migrate_v6(self) -> None:
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS extracted_tables (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                table_index   INTEGER NOT NULL DEFAULT 0,
+                schema_json   TEXT NOT NULL DEFAULT '[]',
+                rows_json     TEXT NOT NULL DEFAULT '[]',
+                created_at    TEXT NOT NULL
+            )
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc ON extracted_tables(document_id)"
+        )
+
+    def _migrate_v7(self) -> None:
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_similarity (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_id_a      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                doc_id_b      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                score         REAL NOT NULL,
+                model         TEXT NOT NULL DEFAULT 'token-jaccard',
+                updated_at    TEXT NOT NULL,
+                UNIQUE(doc_id_a, doc_id_b)
+            )
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_similarity_a ON document_similarity(doc_id_a)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_similarity_b ON document_similarity(doc_id_b)"
+        )
+
     def _apply_migrations(self) -> None:
         version = self._get_schema_version()
-        if version < 1:
-            if not self._has_column("documents", "updated_at"):
-                self.conn.execute(
-                    "ALTER TABLE documents ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"
-                )
-            if not self._has_column("documents", "error_message"):
-                self.conn.execute("ALTER TABLE documents ADD COLUMN error_message TEXT DEFAULT ''")
-            if not self._has_column("documents", "last_processed_at"):
-                self.conn.execute(
-                    "ALTER TABLE documents ADD COLUMN last_processed_at TEXT DEFAULT ''"
-                )
-            self.conn.execute("UPDATE documents SET updated_at = ingested_at WHERE updated_at = ''")
-            self._set_schema_version(1)
-
-        if version < 2:
-            self.conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_extracted_fields_dedupe "
-                "ON extracted_fields(document_id, field_type, value, position)"
-            )
-            self._set_schema_version(2)
-
-        if version < 3:
-            self.conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS collections (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name        TEXT NOT NULL UNIQUE,
-                    description TEXT DEFAULT '',
-                    created_at  TEXT NOT NULL,
-                    updated_at  TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS collection_rules (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-                    rule_type     TEXT NOT NULL,
-                    rule_value    TEXT NOT NULL,
-                    created_at    TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS document_collections (
-                    document_id    INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                    collection_id  INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-                    score          REAL NOT NULL DEFAULT 1.0,
-                    assigned_at    TEXT NOT NULL,
-                    PRIMARY KEY (document_id, collection_id)
-                );
-                CREATE TABLE IF NOT EXISTS processing_runs (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    started_at    TEXT NOT NULL,
-                    ended_at      TEXT DEFAULT '',
-                    status        TEXT NOT NULL DEFAULT 'running',
-                    engine        TEXT DEFAULT '',
-                    extractor     TEXT DEFAULT '',
-                    processed     INTEGER NOT NULL DEFAULT 0,
-                    errors        INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS processing_events (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id        INTEGER NOT NULL REFERENCES processing_runs(id) ON DELETE CASCADE,
-                    document_id   INTEGER REFERENCES documents(id) ON DELETE SET NULL,
-                    event_type    TEXT NOT NULL,
-                    message       TEXT DEFAULT '',
-                    created_at    TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS document_embeddings (
-                    document_id    INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
-                    model          TEXT NOT NULL,
-                    vector_blob    BLOB NOT NULL,
-                    created_at     TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_document_collections_collection
-                    ON document_collections(collection_id);
-                """
-            )
-            self._set_schema_version(3)
-
-        if version < 4:
-            if not self._has_column("documents", "processing_attempts"):
-                self.conn.execute(
-                    "ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0"
-                )
-            if not self._has_column("documents", "last_error_at"):
-                self.conn.execute("ALTER TABLE documents ADD COLUMN last_error_at TEXT DEFAULT ''")
-            self.conn.execute(
-                "UPDATE documents SET processing_attempts = COALESCE(processing_attempts, 0)"
-            )
-            self.conn.execute("UPDATE documents SET last_error_at = '' WHERE last_error_at IS NULL")
-            self._set_schema_version(4)
-
-        if version < 5:
-            if not self._has_column("processing_runs", "checkpoint_doc_id"):
-                self.conn.execute(
-                    "ALTER TABLE processing_runs ADD COLUMN checkpoint_doc_id INTEGER NOT NULL DEFAULT 0"
-                )
-            if not self._has_column("processing_runs", "aborted_reason"):
-                self.conn.execute(
-                    "ALTER TABLE processing_runs ADD COLUMN aborted_reason TEXT DEFAULT ''"
-                )
-            self.conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS backups (
-                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                    created_at          TEXT NOT NULL,
-                    path                TEXT NOT NULL UNIQUE,
-                    db_hash             TEXT DEFAULT '',
-                    archive_file_count  INTEGER NOT NULL DEFAULT 0,
-                    verified            INTEGER NOT NULL DEFAULT 0
-                )
-                """
-            )
-            self._set_schema_version(5)
-
-        if version < 6:
-            self.conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS extracted_tables (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                    table_index   INTEGER NOT NULL DEFAULT 0,
-                    schema_json   TEXT NOT NULL DEFAULT '[]',
-                    rows_json     TEXT NOT NULL DEFAULT '[]',
-                    created_at    TEXT NOT NULL
-                )
-                """
-            )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc ON extracted_tables(document_id)"
-            )
-            self._set_schema_version(6)
-
-        if version < 7:
-            self.conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS document_similarity (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    doc_id_a      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                    doc_id_b      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                    score         REAL NOT NULL,
-                    model         TEXT NOT NULL DEFAULT 'token-jaccard',
-                    updated_at    TEXT NOT NULL,
-                    UNIQUE(doc_id_a, doc_id_b)
-                )
-                """
-            )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_document_similarity_a ON document_similarity(doc_id_a)"
-            )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_document_similarity_b ON document_similarity(doc_id_b)"
-            )
-            self._set_schema_version(7)
+        migrations = (
+            (1, self._migrate_v1),
+            (2, self._migrate_v2),
+            (3, self._migrate_v3),
+            (4, self._migrate_v4),
+            (5, self._migrate_v5),
+            (6, self._migrate_v6),
+            (7, self._migrate_v7),
+        )
+        for target_version, migration in migrations:
+            if version < target_version:
+                migration()
+                self._set_schema_version(target_version)
 
     def close(self) -> None:
         if self._conn:
