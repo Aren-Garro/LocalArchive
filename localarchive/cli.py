@@ -25,6 +25,9 @@ from localarchive.core.ingester import Ingester, watch_directory
 from localarchive.utils import file_hash
 
 console = Console()
+BACKUP_RESTORE_MAX_MEMBER_BYTES = 256 * 1024 * 1024
+BACKUP_RESTORE_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+BACKUP_RESTORE_MAX_ARCHIVE_FILES = 50000
 
 
 class CLIError(click.ClickException):
@@ -115,6 +118,39 @@ def _validate_threshold(name: str, value: float) -> None:
 
 def _emit_json(payload: dict | list) -> None:
     click.echo(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+
+
+def _copy_zip_member_limited(
+    zf: zipfile.ZipFile,
+    member: zipfile.ZipInfo,
+    dst: Path,
+    limits: dict[str, int],
+) -> int:
+    file_size = int(member.file_size)
+    if file_size < 0 or file_size > BACKUP_RESTORE_MAX_MEMBER_BYTES:
+        raise CLIError(
+            f"Backup restore failed: entry too large ({member.filename}, {file_size} bytes).",
+            exit_code=4,
+        )
+    next_total = int(limits["total"]) + file_size
+    if next_total > BACKUP_RESTORE_MAX_TOTAL_BYTES:
+        raise CLIError("Backup restore failed: extracted payload exceeds safety limit.", exit_code=4)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    with zf.open(member, "r") as src, open(dst, "wb") as out:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            copied += len(chunk)
+            if copied > BACKUP_RESTORE_MAX_MEMBER_BYTES:
+                raise CLIError(
+                    f"Backup restore failed: entry too large while reading ({member.filename}).",
+                    exit_code=4,
+                )
+            out.write(chunk)
+    limits["total"] = int(limits["total"]) + copied
+    return copied
 
 
 def _issue_breakdown(issues: list[dict]) -> dict:
@@ -1173,7 +1209,8 @@ def backup_restore(backup_path: Path | None, use_latest: bool, dry_run: bool, as
         raise CLIError(f"Backup path does not exist: {backup_path}", exit_code=2)
     try:
         with zipfile.ZipFile(backup_path, "r") as zf:
-            members = set(zf.namelist())
+            infos = {info.filename: info for info in zf.infolist()}
+            members = set(infos)
             for name in members:
                 posix = PurePosixPath(name)
                 if posix.is_absolute() or ".." in posix.parts:
@@ -1193,6 +1230,11 @@ def backup_restore(backup_path: Path | None, use_latest: bool, dry_run: bool, as
                     overwrite_count += 1
                 else:
                     create_count += 1
+            if len(archive_entries) > BACKUP_RESTORE_MAX_ARCHIVE_FILES:
+                raise CLIError(
+                    "Backup restore failed: archive contains too many files to restore safely.",
+                    exit_code=4,
+                )
             summary = {
                 "backup": str(backup_path),
                 "has_database": has_db,
@@ -1225,22 +1267,35 @@ def backup_restore(backup_path: Path | None, use_latest: bool, dry_run: bool, as
     moved_pairs: list[tuple[Path, Path]] = []
     created_paths: list[Path] = []
     verify_issue_count = 0
+    limits = {"total": 0}
     try:
         with zipfile.ZipFile(backup_path, "r") as zf:
+            infos = {info.filename: info for info in zf.infolist()}
             if "archive.db" in members:
-                with zf.open("archive.db", "r") as src, open(staging_dir / "archive.db", "wb") as out:
-                    out.write(src.read())
+                _copy_zip_member_limited(
+                    zf,
+                    infos["archive.db"],
+                    staging_dir / "archive.db",
+                    limits,
+                )
             if "config.toml" in members:
-                with zf.open("config.toml", "r") as src, open(staging_dir / "config.toml", "wb") as out:
-                    out.write(src.read())
+                _copy_zip_member_limited(
+                    zf,
+                    infos["config.toml"],
+                    staging_dir / "config.toml",
+                    limits,
+                )
             for name in members:
                 if not name.startswith("archive_data/") or name.endswith("/"):
                     continue
                 rel = Path(*PurePosixPath(name).parts[1:])
                 staged = staging_dir / "archive_data" / rel
-                staged.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(name, "r") as src, open(staged, "wb") as out:
-                    out.write(src.read())
+                _copy_zip_member_limited(
+                    zf,
+                    infos[name],
+                    staged,
+                    limits,
+                )
 
         staged_db = staging_dir / "archive.db"
         if staged_db.exists():

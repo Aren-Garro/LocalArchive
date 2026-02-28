@@ -1,5 +1,6 @@
 """Tests for LocalArchive FastAPI UI routes."""
 
+import re
 import uuid
 from pathlib import Path
 import pytest
@@ -35,6 +36,12 @@ def _workspace_tmp_dir(prefix: str) -> Path:
     return path
 
 
+def _csrf_token_from_html(html: str) -> str:
+    match = re.search(r'name="csrf_token" value="([^"]+)"', html)
+    assert match
+    return str(match.group(1))
+
+
 def test_ui_index_and_search():
     pytest.importorskip("fastapi")
     pytest.importorskip("fastapi.testclient")
@@ -62,6 +69,11 @@ def test_ui_index_and_search():
     res = client.get("/", params={"q": "Acme", "tag": "finance", "file_type": "pdf"})
     assert res.status_code == 200
     assert "invoice.pdf" in res.text
+
+    res = client.get("/", params={"q": "Acme", "tag": "missing-tag", "file_type": "pdf"})
+    assert res.status_code == 200
+    assert "invoice.pdf" not in res.text
+    assert "0 documents found" in res.text
 
 
 def test_ui_document_detail():
@@ -108,8 +120,15 @@ def test_ui_document_actions():
 
     app = create_app(config)
     client = TestClient(app)
+    detail = client.get(f"/documents/{doc_id}")
+    assert detail.status_code == 200
+    csrf_token = _csrf_token_from_html(detail.text)
 
-    res = client.post(f"/documents/{doc_id}/retry", follow_redirects=False)
+    res = client.post(
+        f"/documents/{doc_id}/retry",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
     assert res.status_code == 303
 
     db = Database(db_path)
@@ -119,7 +138,14 @@ def test_ui_document_actions():
     assert doc["error_message"] == ""
     db.close()
 
-    res = client.post(f"/documents/{doc_id}/tags", data={"tags": "health, urgent"}, follow_redirects=False)
+    detail = client.get(f"/documents/{doc_id}")
+    assert detail.status_code == 200
+    csrf_token = _csrf_token_from_html(detail.text)
+    res = client.post(
+        f"/documents/{doc_id}/tags",
+        data={"tags": "health, urgent", "csrf_token": csrf_token},
+        follow_redirects=False,
+    )
     assert res.status_code == 303
 
     db = Database(db_path)
@@ -128,6 +154,33 @@ def test_ui_document_actions():
     db.close()
     assert "health" in tags
     assert "urgent" in tags
+
+
+def test_ui_actions_reject_cross_origin():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi.testclient")
+    from fastapi.testclient import TestClient
+    from localarchive.ui.app import create_app
+
+    tmp_path = _workspace_tmp_dir("localarchive-ui-csrf")
+    db_path = tmp_path / "ui-csrf.db"
+    config = Config(archive_dir=tmp_path / "archive", db_path=db_path)
+    db = Database(db_path)
+    db.initialize()
+    doc_id = _seed_db(db)
+    db.close()
+
+    app = create_app(config)
+    client = TestClient(app)
+    detail = client.get(f"/documents/{doc_id}")
+    csrf_token = _csrf_token_from_html(detail.text)
+    res = client.post(
+        f"/documents/{doc_id}/retry",
+        data={"csrf_token": csrf_token},
+        headers={"origin": "https://evil.example"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 403
 
 
 def test_ui_status_filter_dropdown():

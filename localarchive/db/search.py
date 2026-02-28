@@ -140,17 +140,32 @@ class SearchEngine:
         scored.sort(key=lambda d: d["fuzzy_score"], reverse=True)
         return scored[:limit]
 
-    def count(self, query: str, status: str | None = None) -> int:
+    def count(
+        self,
+        query: str,
+        tag: str | None = None,
+        file_type: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        base_query = (
+            "SELECT COUNT(*) as cnt FROM documents_fts fts "
+            "JOIN documents d ON d.id = fts.rowid "
+            "WHERE documents_fts MATCH ?"
+        )
+        params: list = [query]
+        if tag:
+            base_query += (
+                " AND d.id IN (SELECT dt.document_id FROM document_tags dt "
+                "JOIN tags t ON t.id = dt.tag_id WHERE t.name = ?)"
+            )
+            params.append(tag)
+        if file_type:
+            base_query += " AND d.file_type = ?"
+            params.append(file_type)
         if status:
-            row = self.db.conn.execute(
-                "SELECT COUNT(*) as cnt FROM documents_fts fts JOIN documents d ON d.id = fts.rowid "
-                "WHERE documents_fts MATCH ? AND d.status = ?",
-                (query, status),
-            ).fetchone()
-            return row["cnt"] if row else 0
-        row = self.db.conn.execute(
-            "SELECT COUNT(*) as cnt FROM documents_fts WHERE documents_fts MATCH ?", (query,)
-        ).fetchone()
+            base_query += " AND d.status = ?"
+            params.append(status)
+        row = self.db.conn.execute(base_query, params).fetchone()
         return row["cnt"] if row else 0
 
     def recent(self, limit: int = 10, offset: int = 0, status: str | None = None) -> list[dict]:

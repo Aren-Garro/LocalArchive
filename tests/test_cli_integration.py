@@ -371,6 +371,22 @@ def test_backup_restore_rejects_unsafe_paths(monkeypatch):
     assert result.exit_code == 2
 
 
+def test_backup_restore_rejects_large_entries(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-large-backup")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    monkeypatch.setattr("localarchive.cli.BACKUP_RESTORE_MAX_MEMBER_BYTES", 32)
+
+    large_zip = tmp_path / "large.zip"
+    with zipfile.ZipFile(large_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("archive_data/large.txt", "x" * 64)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["backup", "restore", "--path", str(large_zip)])
+    assert result.exit_code == 4
+    assert "entry too large" in result.output
+
+
 def test_backup_restore_dry_run_summary(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-restore-dry-run")
     config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")

@@ -1,6 +1,8 @@
 """FastAPI web UI for LocalArchive. Lightweight HTMX-based interface."""
 
+import secrets
 from html import escape
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -13,6 +15,42 @@ app = FastAPI(title="LocalArchive", docs_url=None, redoc_url=None)
 config: Config = None
 _db: Database = None
 search_engine: SearchEngine = None
+
+
+def _is_same_origin(request: Request) -> bool:
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    parsed = urlparse(origin)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = request.headers.get("host", "")
+    expected = host.split(":")[0].lower()
+    return (parsed.hostname or "").lower() == expected
+
+
+def _ensure_csrf_token(request: Request) -> str:
+    token = request.cookies.get("localarchive_csrf")
+    if token:
+        return token
+    return secrets.token_urlsafe(24)
+
+
+def _with_csrf_cookie(response: HTMLResponse, csrf_token: str) -> HTMLResponse:
+    response.set_cookie(
+        "localarchive_csrf",
+        csrf_token,
+        httponly=False,
+        samesite="strict",
+        secure=False,
+        path="/",
+    )
+    return response
+
+
+def _validate_csrf(request: Request, csrf_token: str) -> bool:
+    cookie_token = request.cookies.get("localarchive_csrf", "")
+    return bool(cookie_token) and secrets.compare_digest(cookie_token, csrf_token)
 
 
 def create_app(cfg: Config) -> FastAPI:
@@ -48,7 +86,12 @@ async def index(
             file_type=file_type or None,
             status=status or None,
         )
-        total = search_engine.count(q, status=status or None)
+        total = search_engine.count(
+            q,
+            tag=tag or None,
+            file_type=file_type or None,
+            status=status or None,
+        )
     else:
         results = search_engine.recent(limit=page_limit, offset=offset, status=status or None)
         if status:
@@ -62,6 +105,7 @@ async def index(
     cards = "".join(_render_card(doc) for doc in results)
     plural = "s" if total != 1 else ""
     context = "found" if q else "in archive"
+    csrf_token = _ensure_csrf_token(request)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -69,7 +113,6 @@ async def index(
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LocalArchive</title>
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -121,11 +164,11 @@ async def index(
     </nav>
 </body>
 </html>"""
-    return HTMLResponse(content=html)
+    return _with_csrf_cookie(HTMLResponse(content=html), csrf_token)
 
 
 @app.get("/documents/{doc_id}", response_class=HTMLResponse)
-async def document_detail(doc_id: int):
+async def document_detail(request: Request, doc_id: int):
     doc = _db.get_document_detail(doc_id)
     if not doc:
         return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
@@ -138,7 +181,8 @@ async def document_detail(doc_id: int):
     ) or "<tr><td colspan='2'>No extracted fields</td></tr>"
     preview = escape((doc.get("ocr_text") or "")[:5000]).replace("\n", "<br>")
     status = escape(str(doc.get("status", "?")))
-    return HTMLResponse(
+    csrf_token = _ensure_csrf_token(request)
+    response = HTMLResponse(
         content=f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -165,10 +209,12 @@ async def document_detail(doc_id: int):
     <p><strong>Status:</strong> <span class="chip {status}">{status}</span></p>
     <p><strong>Tags:</strong> {tags}</p>
     <form action="/documents/{doc_id}/retry" method="post" style="margin-top:0.75rem;">
+        <input type="hidden" name="csrf_token" value="{csrf_token}">
         <button type="submit">Retry Processing</button>
     </form>
     <form action="/documents/{doc_id}/tags" method="post" style="margin-top:0.75rem;">
         <label><strong>Update Tags:</strong></label><br>
+        <input type="hidden" name="csrf_token" value="{csrf_token}">
         <input type="text" name="tags" value="{escape(', '.join(doc.get('tags', [])))}" style="width:100%;max-width:480px;">
         <button type="submit">Save Tags</button>
     </form>
@@ -182,10 +228,13 @@ async def document_detail(doc_id: int):
 </body>
 </html>"""
     )
+    return _with_csrf_cookie(response, csrf_token)
 
 
 @app.post("/documents/{doc_id}/retry")
-async def retry_document(doc_id: int):
+async def retry_document(request: Request, doc_id: int, csrf_token: str = Form(default="")):
+    if not _is_same_origin(request) or not _validate_csrf(request, csrf_token):
+        return HTMLResponse(content="<h1>Forbidden</h1>", status_code=403)
     doc = _db.get_document(doc_id)
     if not doc:
         return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
@@ -194,7 +243,14 @@ async def retry_document(doc_id: int):
 
 
 @app.post("/documents/{doc_id}/tags")
-async def update_document_tags(doc_id: int, tags: str = Form(default="")):
+async def update_document_tags(
+    request: Request,
+    doc_id: int,
+    tags: str = Form(default=""),
+    csrf_token: str = Form(default=""),
+):
+    if not _is_same_origin(request) or not _validate_csrf(request, csrf_token):
+        return HTMLResponse(content="<h1>Forbidden</h1>", status_code=403)
     doc = _db.get_document(doc_id)
     if not doc:
         return HTMLResponse(content="<h1>Document not found</h1>", status_code=404)
