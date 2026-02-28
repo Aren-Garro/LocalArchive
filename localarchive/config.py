@@ -11,10 +11,47 @@ try:
     import toml
 except ImportError:
     toml = None
+try:
+    import tomllib
+except ImportError:
+    tomllib = None
 
 DEFAULT_ARCHIVE_DIR = Path.home() / ".localarchive" / "data"
 DEFAULT_DB_PATH = Path.home() / ".localarchive" / "archive.db"
 DEFAULT_CONFIG_PATH = Path.home() / ".localarchive" / "config.toml"
+
+
+def _toml_load_file(config_path: Path) -> dict:
+    if toml is not None:
+        return toml.load(config_path)
+    if tomllib is not None:
+        with open(config_path, "rb") as f:
+            return tomllib.load(f)
+    return {}
+
+
+def _toml_serialize(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_serialize(v) for v in value) + "]"
+    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{text}"'
+
+
+def _toml_dump_file(config_path: Path, data: dict) -> None:
+    if toml is not None:
+        with open(config_path, "w", encoding="utf-8") as f:
+            toml.dump(data, f)
+        return
+    with open(config_path, "w", encoding="utf-8") as f:
+        for section, values in data.items():
+            f.write(f"[{section}]\n")
+            for key, value in values.items():
+                f.write(f"{key} = {_toml_serialize(value)}\n")
+            f.write("\n")
 
 
 @dataclass
@@ -99,6 +136,14 @@ class ReliabilityConfig:
 
 
 @dataclass
+class PluginsConfig:
+    enabled: list[str] = field(default_factory=list)
+    search_paths: list[Path] = field(
+        default_factory=lambda: [Path.home() / ".localarchive" / "plugins"]
+    )
+
+
+@dataclass
 class UIConfig:
     host: str = "127.0.0.1"
     port: int = 8877
@@ -120,13 +165,14 @@ class Config:
     autopilot: AutopilotConfig = field(default_factory=AutopilotConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)
+    plugins: PluginsConfig = field(default_factory=PluginsConfig)
 
     @classmethod
     def load(cls, config_path: Path = DEFAULT_CONFIG_PATH) -> "Config":
         """Load config from TOML file, falling back to defaults."""
         config = cls()
-        if config_path.exists() and toml is not None:
-            data = toml.load(config_path)
+        if config_path.exists():
+            data = _toml_load_file(config_path)
             general = data.get("general", {})
             if "archive_dir" in general:
                 config.archive_dir = Path(os.path.expanduser(general["archive_dir"]))
@@ -316,6 +362,17 @@ class Config:
                         )
                     ),
                 )
+            plugins_data = data.get("plugins", {})
+            if plugins_data:
+                config.plugins = PluginsConfig(
+                    enabled=list(plugins_data.get("enabled", config.plugins.enabled)),
+                    search_paths=[
+                        Path(os.path.expanduser(str(p)))
+                        for p in plugins_data.get(
+                            "search_paths", [str(x) for x in config.plugins.search_paths]
+                        )
+                    ],
+                )
         config.validate()
         return config
 
@@ -383,10 +440,12 @@ class Config:
             raise ValueError("reliability.checkpoint_batch_size must be >= 1")
         if self.reliability.backup_retention_count < 1:
             raise ValueError("reliability.backup_retention_count must be >= 1")
+        if any(not str(name).strip() for name in self.plugins.enabled):
+            raise ValueError("plugins.enabled cannot contain empty names")
+        if not self.plugins.search_paths:
+            raise ValueError("plugins.search_paths must contain at least one path")
 
     def save(self, config_path: Path = DEFAULT_CONFIG_PATH) -> None:
-        if toml is None:
-            return
         config_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "general": {"archive_dir": str(self.archive_dir), "db_path": str(self.db_path)},
@@ -457,6 +516,9 @@ class Config:
                 "backup_retention_count": self.reliability.backup_retention_count,
                 "backup_verify_on_create": self.reliability.backup_verify_on_create,
             },
+            "plugins": {
+                "enabled": self.plugins.enabled,
+                "search_paths": [str(p) for p in self.plugins.search_paths],
+            },
         }
-        with open(config_path, "w") as f:
-            toml.dump(data, f)
+        _toml_dump_file(config_path, data)

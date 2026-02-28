@@ -143,6 +143,8 @@ python -m localarchive.cli doctor --json
 # Build and inspect smart collections
 python -m localarchive.cli collections auto-build
 python -m localarchive.cli collections list
+python -m localarchive.cli plugins list
+python -m localarchive.cli plugins inspect demo_plugin --json
 
 # Timeline view by extracted entity
 python -m localarchive.cli timeline --entity topic
@@ -264,6 +266,10 @@ checkpoint_batch_size = 25
 auto_verify_after_restore = true
 backup_retention_count = 10
 backup_verify_on_create = true
+
+[plugins]
+enabled = []
+search_paths = ["~/.localarchive/plugins"]
 ```
 
 ## Roadmap

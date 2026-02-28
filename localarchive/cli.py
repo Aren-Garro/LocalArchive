@@ -1179,6 +1179,95 @@ def doctor(as_json: bool):
 
 
 @main.group()
+def plugins():
+    """Inspect and manage local plugins."""
+    pass
+
+
+@plugins.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Emit plugins as JSON.")
+def plugins_list(as_json: bool):
+    """List discovered plugins from configured search paths."""
+    from localarchive.core.plugins import discover_plugins
+
+    config = get_config()
+    rows = discover_plugins(config)
+    if as_json:
+        _emit_json({"count": len(rows), "plugins": rows})
+        return
+    table = Table(title="Plugins")
+    table.add_column("Name", style="bold")
+    table.add_column("Version", width=10)
+    table.add_column("Kind", width=12)
+    table.add_column("Enabled", width=8)
+    table.add_column("Path")
+    for row in rows:
+        table.add_row(
+            str(row.get("name", "")),
+            str(row.get("version", "")),
+            str(row.get("kind", "")),
+            "yes" if row.get("enabled") else "no",
+            str(row.get("path", "")),
+        )
+    console.print(table)
+
+
+@plugins.command("inspect")
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True, help="Emit plugin details as JSON.")
+def plugins_inspect(name: str, as_json: bool):
+    """Inspect a discovered plugin manifest."""
+    from localarchive.core.plugins import get_plugin_by_name
+
+    config = get_config()
+    row = get_plugin_by_name(config, name)
+    if not row:
+        raise CLIError(f"Plugin `{name}` not found in configured search paths.", exit_code=2)
+    if as_json:
+        _emit_json(row)
+        return
+    table = Table(title=f"Plugin: {row['name']}")
+    table.add_column("Field", style="bold", width=16)
+    table.add_column("Value")
+    for key in ("name", "version", "kind", "description", "entrypoint", "path", "enabled"):
+        table.add_row(key, str(row.get(key, "")))
+    console.print(table)
+
+
+@plugins.command("enable")
+@click.argument("name")
+def plugins_enable(name: str):
+    """Enable plugin by name in config.plugins.enabled."""
+    from localarchive.core.plugins import get_plugin_by_name
+
+    config = get_config()
+    row = get_plugin_by_name(config, name)
+    if not row:
+        raise CLIError(f"Plugin `{name}` not found in configured search paths.", exit_code=2)
+    if row["name"] not in config.plugins.enabled:
+        config.plugins.enabled.append(row["name"])
+        config.plugins.enabled = sorted(set(config.plugins.enabled))
+    config_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
+    config.save(config_path)
+    console.print(f"[green]Enabled plugin:[/green] {row['name']}")
+
+
+@plugins.command("disable")
+@click.argument("name")
+def plugins_disable(name: str):
+    """Disable plugin by name in config.plugins.enabled."""
+    config = get_config()
+    target = name.strip().lower()
+    kept = [n for n in config.plugins.enabled if str(n).strip().lower() != target]
+    if len(kept) == len(config.plugins.enabled):
+        raise CLIError(f"Plugin `{name}` is not enabled.", exit_code=2)
+    config.plugins.enabled = kept
+    config_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
+    config.save(config_path)
+    console.print(f"[green]Disabled plugin:[/green] {name}")
+
+
+@main.group()
 def collections():
     """Manage smart collections."""
     pass
