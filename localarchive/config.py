@@ -459,9 +459,8 @@ class Config:
         if not self.plugins.search_paths:
             raise ValueError("plugins.search_paths must contain at least one path")
 
-    def save(self, config_path: Path = DEFAULT_CONFIG_PATH) -> None:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
+    def _to_toml_data(self) -> dict:
+        return {
             "general": {"archive_dir": str(self.archive_dir), "db_path": str(self.db_path)},
             "ocr": {
                 "engine": self.ocr.engine,
@@ -536,4 +535,7 @@ class Config:
                 "search_paths": [str(p) for p in self.plugins.search_paths],
             },
         }
-        _toml_dump_file(config_path, data)
+
+    def save(self, config_path: Path = DEFAULT_CONFIG_PATH) -> None:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        _toml_dump_file(config_path, self._to_toml_data())
