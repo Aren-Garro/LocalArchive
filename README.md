@@ -137,7 +137,7 @@ python -m localarchive.cli backup restore --path localarchive-backup.zip
 3. **Open formats** — Data stored in SQLite, exports to CSV/JSON/Markdown.
 4. **Privacy first** — Your documents never leave your device.
 5. **Offline always** — Full functionality without internet.
-6. **Free forever** — No fees, no subscriptions, no paywalls. Built to serve humanity.
+6. **Free forever** — No fees, no subscriptions, no paywalls.
 
 ## Tech Stack
 
@@ -216,8 +216,6 @@ checkpoint_batch_size = 25
 
 ## Roadmap
 
-**Mission**: Build a fee-less, privacy-respecting document intelligence tool that serves humanity. No paywalls, no subscriptions, no data harvesting—just useful software for everyone.
-
 ### Completed ✓
 - [x] Project architecture & scaffolding
 - [x] CLI with init, ingest, search, export, tag, process, reprocess, watch, doctor, collections, timeline, audit, backup, serve commands
@@ -257,21 +255,14 @@ checkpoint_batch_size = 25
 - [ ] **Version control** — Track document changes over time
 - [ ] **Citation extraction** — Auto-build bibliographies from research papers
 
-### Humanitarian Focus
-- [ ] **Medical record templates** — Pre-built extractors for lab results, prescriptions, insurance claims
-- [ ] **Multilingual nonprofit support** — Partner with NGOs to digitize archives in underserved regions
-- [ ] **Accessibility-first design** — Ensure LocalArchive works for users with disabilities
-- [ ] **Low-resource optimization** — Run efficiently on older hardware to maximize global access
-- [ ] **Open data advocacy** — Promote document format standards and anti-vendor-lock-in practices
-
-### Sustainability Model
+### Sustainability
 LocalArchive will remain **free and open-source forever**. Sustainability through:
-- **Voluntary donations** — Optional support from users who find value
-- **Institutional sponsorships** — Universities, libraries, nonprofits funding development
-- **Consulting/support services** — Professional implementation help for organizations (not required for use)
-- **Community contributions** — Developer time, documentation, translations, bug reports
+- Voluntary donations from users who find value
+- Institutional sponsorships (universities, libraries, nonprofits)
+- Optional consulting/support services for organizations
+- Community contributions (code, documentation, translations)
 
-**No planned features will ever require payment.** If you build something useful, it should serve everyone.
+No planned features will ever require payment.
 
 ## License
 
