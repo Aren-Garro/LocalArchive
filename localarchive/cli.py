@@ -284,6 +284,7 @@ def search(
         console.print(f"[dim]Fuzzy search enabled: threshold={threshold:.2f} candidates={max_candidates}[/dim]")
     if not results:
         console.print("[yellow]No results found.[/yellow]")
+        console.print("[dim]Hint: try `localarchive search \"<term>\" --fuzzy` or broaden filters.[/dim]")
         db.close()
         return
     if as_json:
@@ -449,6 +450,7 @@ def process(
     pending = db.list_documents_for_processing(limit=max_docs, after_doc_id=after_doc_id)
     if not pending:
         console.print("[dim]No documents pending OCR for the selected scope.[/dim]")
+        console.print("[dim]Hint: run `localarchive ingest <file_or_folder>` first.[/dim]")
         db.close()
         return
     if dry_run:
@@ -645,6 +647,7 @@ def classify(limit: int, retag: bool, explain: bool):
     docs = db.list_documents(status="processed", limit=limit)
     if not docs:
         console.print("[dim]No processed documents available for classification.[/dim]")
+        console.print("[dim]Hint: run `localarchive process` before classification.[/dim]")
         db.close()
         return
     category_tags = {"invoice", "receipt", "medical", "research", "other"}
@@ -702,6 +705,7 @@ def reprocess(status: str, since: str | None, limit: int, dry_run: bool):
     docs = db.list_documents_for_reprocess(status=status, since=since, limit=limit)
     if not docs:
         console.print("[dim]No matching documents to reprocess.[/dim]")
+        console.print("[dim]Hint: run `localarchive audit` to inspect archive health.[/dim]")
         db.close()
         return
     doc_ids = [d["id"] for d in docs]

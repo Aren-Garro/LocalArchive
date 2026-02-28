@@ -266,6 +266,22 @@ def test_search_semantic_weight_validation(monkeypatch):
     assert result.exit_code == 2
 
 
+def test_search_no_results_shows_hint(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-search-hint")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["search", "nothinghere"])
+    assert result.exit_code == 0
+    assert "No results found." in result.output
+    assert "Hint: try `localarchive search" in result.output
+
+
 def test_process_parallel_workers_and_checkpoint(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-process-parallel")
     archive_dir = tmp_path / "archive"
@@ -307,6 +323,22 @@ def test_process_parallel_workers_and_checkpoint(monkeypatch):
     docs = db.list_documents(status="processed", limit=10)
     db.close()
     assert len(docs) == 3
+
+
+def test_process_empty_queue_shows_hint(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-process-hint")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["process"])
+    assert result.exit_code == 0
+    assert "No documents pending OCR" in result.output
+    assert "Hint: run `localarchive ingest" in result.output
 
 
 def test_process_failure_tracks_retries_and_cleans_temp_files(monkeypatch):
