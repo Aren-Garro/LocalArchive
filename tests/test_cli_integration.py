@@ -244,6 +244,28 @@ def test_backup_retention_keeps_newest_only(monkeypatch):
     payload = json.loads(result.output)
     assert int(payload.get("count", 0)) == 1
     assert payload["backups"][0]["path"].endswith("backup2.zip")
+    assert payload["backups"][0]["exists"] is True
+
+
+def test_backup_list_prune_missing(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-backup-prune")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.record_backup(path=str(tmp_path / "ghost.zip"), db_hash="", archive_file_count=0, verified=False)
+    db.close()
+
+    runner = CliRunner()
+    before = runner.invoke(main, ["backup", "list", "--json"])
+    assert before.exit_code == 0
+    assert '"count": 1' in before.output
+    assert '"exists": false' in before.output
+
+    after = runner.invoke(main, ["backup", "list", "--json", "--prune-missing"])
+    assert after.exit_code == 0
+    assert '"count": 0' in after.output
 
 
 def test_backup_restore_rejects_unsafe_paths(monkeypatch):

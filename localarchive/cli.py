@@ -1008,27 +1008,41 @@ def backup():
 @backup.command("list")
 @click.option("--limit", default=20, type=int, help="Max backups to show.")
 @click.option("--json", "as_json", is_flag=True, help="Emit backups as JSON.")
-def backup_list(limit: int, as_json: bool):
+@click.option("--prune-missing", is_flag=True, help="Remove records whose backup files no longer exist.")
+def backup_list(limit: int, as_json: bool, prune_missing: bool):
     """List tracked backups."""
     _validate_limit(limit)
     config = get_config()
     db = get_db(config)
     rows = db.list_backups(limit=limit)
+    if prune_missing:
+        for row in rows:
+            p = Path(str(row.get("path", "")))
+            if not p.exists():
+                db.delete_backup_record(str(row.get("path", "")))
+        rows = db.list_backups(limit=limit)
+    enriched = []
+    for row in rows:
+        r = dict(row)
+        r["exists"] = Path(str(r.get("path", ""))).exists()
+        enriched.append(r)
     db.close()
     if as_json:
-        _emit_json({"count": len(rows), "backups": rows})
+        _emit_json({"count": len(enriched), "backups": enriched})
         return
     table = Table(title="Backups")
     table.add_column("Created", width=24)
     table.add_column("Path", style="bold")
     table.add_column("Files", width=8)
     table.add_column("Verified", width=8)
-    for row in rows:
+    table.add_column("Exists", width=8)
+    for row in enriched:
         table.add_row(
             str(row.get("created_at", "")),
             str(row.get("path", "")),
             str(row.get("archive_file_count", 0)),
             "yes" if int(row.get("verified", 0)) else "no",
+            "yes" if row.get("exists") else "no",
         )
     console.print(table)
 
