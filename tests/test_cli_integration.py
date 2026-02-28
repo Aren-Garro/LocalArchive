@@ -1105,3 +1105,59 @@ def test_export_include_tables_json(monkeypatch):
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload
     assert "tables" in payload[0]
+
+
+def test_similarity_build_and_query(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-similarity")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    db = Database(config.db_path)
+    db.initialize()
+    p1 = tmp_path / "a.txt"
+    p2 = tmp_path / "b.txt"
+    p3 = tmp_path / "c.txt"
+    p1.write_bytes(b"a")
+    p2.write_bytes(b"b")
+    p3.write_bytes(b"c")
+    db.insert_document(
+        filename="a.txt",
+        filepath=str(p1),
+        file_hash="sim-a",
+        file_type="txt",
+        file_size=1,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="invoice payment receipt amount total",
+    )
+    db.insert_document(
+        filename="b.txt",
+        filepath=str(p2),
+        file_hash="sim-b",
+        file_type="txt",
+        file_size=1,
+        ingested_at="2026-01-01T00:00:01Z",
+        status="processed",
+        ocr_text="invoice amount balance payment",
+    )
+    db.insert_document(
+        filename="c.txt",
+        filepath=str(p3),
+        file_hash="sim-c",
+        file_type="txt",
+        file_size=1,
+        ingested_at="2026-01-01T00:00:02Z",
+        status="processed",
+        ocr_text="biology chemistry microscopy experiment",
+    )
+    db.close()
+
+    runner = CliRunner()
+    build = runner.invoke(main, ["similarity", "build", "--json", "--limit", "10"])
+    assert build.exit_code == 0
+    assert '"built": true' in build.output
+    assert '"edges":' in build.output
+
+    related = runner.invoke(main, ["similarity", "for", "1", "--json", "--top-k", "5"])
+    assert related.exit_code == 0
+    assert '"doc_id": 1' in related.output
+    assert '"related_id": 2' in related.output

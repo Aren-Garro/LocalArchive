@@ -73,6 +73,16 @@ CREATE TABLE IF NOT EXISTS extracted_tables (
     created_at    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS document_similarity (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id_a      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    doc_id_b      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    score         REAL NOT NULL,
+    model         TEXT NOT NULL DEFAULT 'token-jaccard',
+    updated_at    TEXT NOT NULL,
+    UNIQUE(doc_id_a, doc_id_b)
+);
+
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
@@ -144,6 +154,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_doc ON extracted_fields(document_id);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_type ON extracted_fields(field_type);
 CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc ON extracted_tables(document_id);
+CREATE INDEX IF NOT EXISTS idx_document_similarity_a ON document_similarity(doc_id_a);
+CREATE INDEX IF NOT EXISTS idx_document_similarity_b ON document_similarity(doc_id_b);
 CREATE INDEX IF NOT EXISTS idx_document_collections_collection ON document_collections(collection_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_extracted_fields_dedupe
     ON extracted_fields(document_id, field_type, value, position);

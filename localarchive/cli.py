@@ -1102,6 +1102,83 @@ def collections_list(as_json: bool):
     db.close()
 
 
+@main.group()
+def similarity():
+    """Build and inspect local document similarity edges."""
+    pass
+
+
+@similarity.command("build")
+@click.option("--limit", default=2000, type=int, help="Max processed documents to include.")
+@click.option("--top-k", default=5, type=int, help="Max neighbors per document.")
+@click.option("--min-score", default=0.15, type=float, help="Minimum similarity score (0-1).")
+@click.option("--json", "as_json", is_flag=True, help="Emit build summary as JSON.")
+def similarity_build(limit: int, top_k: int, min_score: float, as_json: bool):
+    """Build pairwise similarity edges using local token-based scoring."""
+    from localarchive.core.similarity import build_similarity_edges
+
+    _validate_limit(limit)
+    _validate_limit(top_k)
+    _validate_threshold("min-score", min_score)
+    config = get_config()
+    db = get_db(config)
+    docs = db.list_documents(status="processed", limit=limit)
+    edges = build_similarity_edges(docs, top_k=top_k, min_score=min_score)
+    db.clear_similarity()
+    db.upsert_similarity_edges(edges)
+    payload = {
+        "built": True,
+        "documents": len(docs),
+        "edges": len(edges),
+        "top_k": int(top_k),
+        "min_score": float(min_score),
+        "model": "token-jaccard",
+    }
+    db.close()
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(
+        f"[green]Similarity built:[/green] {payload['documents']} docs, {payload['edges']} edges "
+        f"(top_k={top_k}, min_score={min_score:.2f})"
+    )
+
+
+@similarity.command("for")
+@click.argument("doc_id", type=int)
+@click.option("--top-k", default=10, type=int, help="Max related documents to return.")
+@click.option("--json", "as_json", is_flag=True, help="Emit related documents as JSON.")
+def similarity_for(doc_id: int, top_k: int, as_json: bool):
+    """Show most similar documents for a given doc ID."""
+    _validate_limit(top_k)
+    config = get_config()
+    db = get_db(config)
+    doc = db.get_document(doc_id)
+    if not doc:
+        db.close()
+        raise CLIError(f"Document {doc_id} not found.", exit_code=2)
+    rows = db.get_similar_documents(doc_id, limit=top_k)
+    db.close()
+    if as_json:
+        _emit_json({"doc_id": doc_id, "count": len(rows), "related": rows})
+        return
+    table = Table(title=f"Related Documents for {doc_id}")
+    table.add_column("ID", style="cyan", width=8)
+    table.add_column("Filename", style="bold")
+    table.add_column("Type", width=8)
+    table.add_column("Status", width=12)
+    table.add_column("Score", width=8)
+    for row in rows:
+        table.add_row(
+            str(row.get("related_id")),
+            str(row.get("filename", "")),
+            str(row.get("file_type", "")),
+            str(row.get("status", "")),
+            f"{float(row.get('score', 0.0)):.3f}",
+        )
+    console.print(table)
+
+
 @main.command()
 @click.option("--entity", type=click.Choice(["author", "topic", "journal"]), default="topic")
 @click.option("--limit", default=100, type=int)

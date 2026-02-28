@@ -106,6 +106,8 @@ python -m localarchive.cli process --extractor hybrid
 
 # Search your archive
 python -m localarchive.cli search "dentist 2024"
+python -m localarchive.cli similarity build --limit 1000 --top-k 5
+python -m localarchive.cli similarity for 42 --json
 
 # Hybrid search flags (semantic routing if enabled in config)
 python -m localarchive.cli search "graph neural nets" --semantic --bm25-weight 0.6 --vector-weight 0.4

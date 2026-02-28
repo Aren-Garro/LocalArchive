@@ -8,7 +8,7 @@ from pathlib import Path
 from localarchive.db.models import SCHEMA_SQL
 from localarchive.utils import file_hash, timestamp_now
 
-LATEST_SCHEMA_VERSION = 6
+LATEST_SCHEMA_VERSION = 7
 
 
 class Database:
@@ -174,6 +174,28 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc ON extracted_tables(document_id)"
             )
             self._set_schema_version(6)
+
+        if version < 7:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_similarity (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    doc_id_a      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    doc_id_b      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    score         REAL NOT NULL,
+                    model         TEXT NOT NULL DEFAULT 'token-jaccard',
+                    updated_at    TEXT NOT NULL,
+                    UNIQUE(doc_id_a, doc_id_b)
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_document_similarity_a ON document_similarity(doc_id_a)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_document_similarity_b ON document_similarity(doc_id_b)"
+            )
+            self._set_schema_version(7)
 
     def close(self) -> None:
         if self._conn:
@@ -469,6 +491,47 @@ class Database:
                 table_rows = []
             out.append({"table_index": int(row["table_index"]), "headers": headers, "rows": table_rows})
         return out
+
+    def clear_similarity(self) -> None:
+        self.conn.execute("DELETE FROM document_similarity")
+        self.conn.commit()
+
+    def upsert_similarity_edges(self, edges: list[dict]) -> None:
+        now = timestamp_now()
+        for edge in edges:
+            a = int(edge["doc_id_a"])
+            b = int(edge["doc_id_b"])
+            score = float(edge["score"])
+            if a == b:
+                continue
+            left, right = (a, b) if a < b else (b, a)
+            self.conn.execute(
+                "INSERT INTO document_similarity(doc_id_a, doc_id_b, score, model, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(doc_id_a, doc_id_b) DO UPDATE SET "
+                "score = excluded.score, model = excluded.model, updated_at = excluded.updated_at",
+                (left, right, score, str(edge.get("model", "token-jaccard")), now),
+            )
+        self.conn.commit()
+
+    def get_similar_documents(self, doc_id: int, limit: int = 10) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT
+              CASE WHEN ds.doc_id_a = ? THEN ds.doc_id_b ELSE ds.doc_id_a END AS related_id,
+              ds.score AS score,
+              d.filename AS filename,
+              d.file_type AS file_type,
+              d.status AS status
+            FROM document_similarity ds
+            JOIN documents d ON d.id = CASE WHEN ds.doc_id_a = ? THEN ds.doc_id_b ELSE ds.doc_id_a END
+            WHERE ds.doc_id_a = ? OR ds.doc_id_b = ?
+            ORDER BY ds.score DESC, related_id ASC
+            LIMIT ?
+            """,
+            (doc_id, doc_id, doc_id, doc_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def start_processing_run(self, engine: str, extractor: str) -> int:
         cur = self.conn.execute(

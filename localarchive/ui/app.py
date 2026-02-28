@@ -344,6 +344,15 @@ async def document_detail(request: Request, doc_id: int):
             "</div>"
         )
     tables_html = "".join(tables_html_parts)
+    related = _db.get_similar_documents(doc_id, limit=5)
+    related_html = ""
+    if related:
+        items = "".join(
+            f"<li><a href='/documents/{int(r.get('related_id', 0))}'>{escape(str(r.get('filename', 'Untitled')))}</a> "
+            f"<span class='hint'>(score={float(r.get('score', 0.0)):.3f})</span></li>"
+            for r in related
+        )
+        related_html = f"<ul>{items}</ul>"
     csrf_token = _ensure_csrf_token(request)
     response = HTMLResponse(
         content=f"""<!DOCTYPE html>
@@ -382,6 +391,8 @@ async def document_detail(request: Request, doc_id: int):
     <div class="panel">{preview}</div>
     <h2>Extracted Tables</h2>
     {tables_html or "<p class='hint'>No tables extracted.</p>"}
+    <h2>Related Documents</h2>
+    {related_html or "<p class='hint'>No similarity edges built yet. Run `localarchive similarity build`.</p>"}
 </body>
 </html>"""
     )
