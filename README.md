@@ -60,7 +60,19 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # Initialize database
-python -m localarchive.cli init
+python -m localarchive init
+```
+
+### CLI Invocation
+
+You can run LocalArchive either way:
+
+```bash
+# Preferred module entrypoint
+python -m localarchive --help
+
+# Installed console script (after install)
+localarchive --help
 ```
 
 ### Docker (optional)
@@ -85,106 +97,106 @@ docker compose up --build
 
 ```bash
 # Initialize database and config
-python -m localarchive.cli init
+python -m localarchive init
 
 # Ingest a single file
-python -m localarchive.cli ingest invoice.pdf
+python -m localarchive ingest invoice.pdf
 
 # Ingest with research profile (auto research tagging)
-python -m localarchive.cli ingest paper.pdf --profile research
+python -m localarchive ingest paper.pdf --profile research
 
 # Ingest an entire folder
-python -m localarchive.cli ingest ./documents/
+python -m localarchive ingest ./documents/
 
 # Watch a folder for new files (continuous)
-python -m localarchive.cli watch ./documents/
+python -m localarchive watch ./documents/
 
 # Watch once and exit (single scan cycle)
-python -m localarchive.cli watch ./documents/ --once
+python -m localarchive watch ./documents/ --once
 
 # Process pending files (OCR + field extraction)
-python -m localarchive.cli process
-python -m localarchive.cli process --extract-tables
+python -m localarchive process
+python -m localarchive process --extract-tables
 
 # Process in parallel with batched DB commits
-python -m localarchive.cli process --workers 4 --commit-batch-size 20
-python -m localarchive.cli process --ocr-languages en,es
+python -m localarchive process --workers 4 --commit-batch-size 20
+python -m localarchive process --ocr-languages en,es
 
 # Dry-run / resume controls for robust long runs
-python -m localarchive.cli process --dry-run
-python -m localarchive.cli process --resume
-python -m localarchive.cli process --from-run 12 --max-errors 10
-python -m localarchive.cli process --json
+python -m localarchive process --dry-run
+python -m localarchive process --resume
+python -m localarchive process --from-run 12 --max-errors 10
+python -m localarchive process --json
 
 # Requeue failed documents for OCR retry
-python -m localarchive.cli reprocess --status error
+python -m localarchive reprocess --status error
 
 # Choose extractor strategy
-python -m localarchive.cli process --extractor hybrid
+python -m localarchive process --extractor hybrid
 
 # Search your archive
-python -m localarchive.cli search "dentist 2024"
-python -m localarchive.cli similarity build --limit 1000 --top-k 5
-python -m localarchive.cli similarity for 42 --json
+python -m localarchive search "dentist 2024"
+python -m localarchive similarity build --limit 1000 --top-k 5
+python -m localarchive similarity for 42 --json
 
 # Hybrid search flags (semantic routing if enabled in config)
-python -m localarchive.cli search "graph neural nets" --semantic --bm25-weight 0.6 --vector-weight 0.4
+python -m localarchive search "graph neural nets" --semantic --bm25-weight 0.6 --vector-weight 0.4
 
 # OCR-tolerant fuzzy search
-python -m localarchive.cli search "reciept clinic" --fuzzy
+python -m localarchive search "reciept clinic" --fuzzy
 
 # JSON and explainability output for automation/debugging
-python -m localarchive.cli search "receipt" --json
-python -m localarchive.cli search "receipt" --explain-ranking
+python -m localarchive search "receipt" --json
+python -m localarchive search "receipt" --explain-ranking
 
 # Export results to CSV
-python -m localarchive.cli export --query "receipts" --format csv --output results.csv
-python -m localarchive.cli export --format json --output results.json --include-tables
+python -m localarchive export --query "receipts" --format csv --output results.csv
+python -m localarchive export --format json --output results.json --include-tables
 
 # Tag a document
-python -m localarchive.cli tag DOC_ID "medical" "2024"
+python -m localarchive tag DOC_ID "medical" "2024"
 
 # Auto-classify processed docs and apply category tags
-python -m localarchive.cli classify --limit 500
-python -m localarchive.cli classify --limit 200 --explain
-python -m localarchive.cli classify-train --dataset training.csv --format csv --json
-python -m localarchive.cli classify-evaluate --dataset validation.csv --format csv --json
+python -m localarchive classify --limit 500
+python -m localarchive classify --limit 200 --explain
+python -m localarchive classify-train --dataset training.csv --format csv --json
+python -m localarchive classify-evaluate --dataset validation.csv --format csv --json
 
 # Launch web UI (optional)
-python -m localarchive.cli serve
+python -m localarchive serve
 # Browser upload page: http://127.0.0.1:8877/ingest
 # Spanish UI example: http://127.0.0.1:8877/?lang=es
 
 # Environment and dependency checks
-python -m localarchive.cli doctor
-python -m localarchive.cli doctor --json
+python -m localarchive doctor
+python -m localarchive doctor --json
 
 # Build and inspect smart collections
-python -m localarchive.cli collections auto-build
-python -m localarchive.cli collections list
-python -m localarchive.cli plugins list
-python -m localarchive.cli plugins inspect demo_plugin --json
-python -m localarchive.cli connectors imap --host imap.example.com --username user@example.com --dry-run --json
+python -m localarchive collections auto-build
+python -m localarchive collections list
+python -m localarchive plugins list
+python -m localarchive plugins inspect demo_plugin --json
+python -m localarchive connectors imap --host imap.example.com --username user@example.com --dry-run --json
 
 # Timeline view by extracted entity
-python -m localarchive.cli timeline --entity topic
+python -m localarchive timeline --entity topic
 
 # Integrity audit and optional repair
-python -m localarchive.cli audit
-python -m localarchive.cli audit --repair
-python -m localarchive.cli verify --json
-python -m localarchive.cli verify --full --json
+python -m localarchive audit
+python -m localarchive audit --repair
+python -m localarchive verify --json
+python -m localarchive verify --full --json
 
 # Local backup / restore
-python -m localarchive.cli backup create --path localarchive-backup.zip
-python -m localarchive.cli backup create --path localarchive-backup.zip --json
-python -m localarchive.cli backup create --path localarchive-backup.zip --dry-run --json
-python -m localarchive.cli backup list
-python -m localarchive.cli backup list --missing-only
-python -m localarchive.cli backup list --json --prune-missing
-python -m localarchive.cli backup restore --latest --dry-run --json
-python -m localarchive.cli backup restore --path localarchive-backup.zip --dry-run --json
-python -m localarchive.cli backup restore --path localarchive-backup.zip
+python -m localarchive backup create --path localarchive-backup.zip
+python -m localarchive backup create --path localarchive-backup.zip --json
+python -m localarchive backup create --path localarchive-backup.zip --dry-run --json
+python -m localarchive backup list
+python -m localarchive backup list --missing-only
+python -m localarchive backup list --json --prune-missing
+python -m localarchive backup restore --latest --dry-run --json
+python -m localarchive backup restore --path localarchive-backup.zip --dry-run --json
+python -m localarchive backup restore --path localarchive-backup.zip
 
 # Document detail page
 # http://127.0.0.1:8877/documents/<DOC_ID>
