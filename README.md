@@ -255,15 +255,6 @@ checkpoint_batch_size = 25
 - [ ] **Version control** — Track document changes over time
 - [ ] **Citation extraction** — Auto-build bibliographies from research papers
 
-### Sustainability
-LocalArchive will remain **free and open-source forever**. Sustainability through:
-- Voluntary donations from users who find value
-- Institutional sponsorships (universities, libraries, nonprofits)
-- Optional consulting/support services for organizations
-- Community contributions (code, documentation, translations)
-
-No planned features will ever require payment.
-
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
