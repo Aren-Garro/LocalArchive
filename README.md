@@ -156,6 +156,7 @@ python -m localarchive.cli collections auto-build
 python -m localarchive.cli collections list
 python -m localarchive.cli plugins list
 python -m localarchive.cli plugins inspect demo_plugin --json
+python -m localarchive.cli connectors imap --host imap.example.com --username user@example.com --dry-run --json
 
 # Timeline view by extracted entity
 python -m localarchive.cli timeline --entity topic
@@ -314,7 +315,7 @@ search_paths = ["~/.localarchive/plugins"]
 - [x] **Docker containers** — One-command deployment for less technical users
 - [ ] **Pre-built binaries** â€” Windows .exe, macOS .app, Linux AppImage for non-Python users
 - [ ] **Community template library** â€” Share extraction rules for common document types (W-2s, insurance forms, research papers)
-- [ ] **Integration connectors** â€” Email ingestion (IMAP), folder sync daemons, workflow automation hooks
+- [x] **Integration connectors** — Email ingestion (IMAP), folder sync daemons, workflow automation hooks
 - [ ] **Educational resources** â€” Video tutorials, use-case guides, academic partnership programs
 
 ### Advanced Intelligence (Future)
@@ -329,4 +330,5 @@ search_paths = ["~/.localarchive/plugins"]
 ## License
 
 MIT License â€” see [LICENSE](LICENSE) for details.
+
 

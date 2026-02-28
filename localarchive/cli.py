@@ -5,14 +5,20 @@ doctor, collections, timeline, audit, verify, backup, serve
 """
 
 import concurrent.futures
+import contextlib
+import email
+import imaplib
 import importlib.util
+import io
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
 import threading
 import time
 import zipfile
+from email.header import decode_header
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
@@ -24,7 +30,7 @@ from localarchive.config import DEFAULT_CONFIG_PATH, Config
 from localarchive.core.ingester import Ingester, watch_directory
 from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
-from localarchive.utils import file_hash
+from localarchive.utils import file_hash, is_supported, safe_filename
 
 console = Console()
 BACKUP_RESTORE_MAX_MEMBER_BYTES = 256 * 1024 * 1024
@@ -139,6 +145,19 @@ def _parse_ocr_languages(raw: str | None, fallback: list[str]) -> list[str]:
 
 def _emit_json(payload: dict | list) -> None:
     click.echo(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+
+
+def _decode_mime_value(raw: str | None) -> str:
+    if not raw:
+        return ""
+    parts = decode_header(raw)
+    out: list[str] = []
+    for value, encoding in parts:
+        if isinstance(value, bytes):
+            out.append(value.decode(encoding or "utf-8", errors="replace"))
+        else:
+            out.append(str(value))
+    return "".join(out)
 
 
 def _copy_zip_member_limited(
@@ -1835,6 +1854,137 @@ def backup_restore(backup_path: Path | None, use_latest: bool, dry_run: bool, as
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
         shutil.rmtree(rollback_dir, ignore_errors=True)
+
+
+@main.group()
+def connectors():
+    """Integration connectors (email, sync, automation)."""
+
+
+@connectors.command("imap")
+@click.option("--host", required=True, help="IMAP host (for example: imap.gmail.com).")
+@click.option("--username", required=True, help="IMAP username or email address.")
+@click.option(
+    "--password",
+    default="",
+    help="IMAP password or app-password. Falls back to LOCALARCHIVE_IMAP_PASSWORD.",
+)
+@click.option("--mailbox", default="INBOX", show_default=True, help="Mailbox/folder name.")
+@click.option("--unseen/--all", default=True, show_default=True, help="Only fetch unseen emails.")
+@click.option("--limit", default=25, show_default=True, type=int, help="Max messages to inspect.")
+@click.option("--dry-run", is_flag=True, help="Inspect and report without ingesting attachments.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def connectors_imap(
+    host: str,
+    username: str,
+    password: str,
+    mailbox: str,
+    unseen: bool,
+    limit: int,
+    dry_run: bool,
+    as_json: bool,
+):
+    """Ingest supported attachments from an IMAP mailbox."""
+    _validate_limit(limit)
+    resolved_password = password or str(os.environ.get("LOCALARCHIVE_IMAP_PASSWORD", ""))
+    if not resolved_password:
+        raise CLIError(
+            "Missing IMAP password. Provide `--password` or set LOCALARCHIVE_IMAP_PASSWORD.",
+            exit_code=2,
+        )
+
+    config = get_config()
+    config.ensure_dirs()
+    db = get_db(config)
+    ingester = Ingester(config, db)
+    inspected = 0
+    attachments_seen = 0
+    ingested = 0
+    skipped = 0
+    errors = 0
+
+    imap = imaplib.IMAP4_SSL(host)
+    try:
+        imap.login(username, resolved_password)
+        status, _ = imap.select(mailbox)
+        if status != "OK":
+            raise CLIError(f"Failed to open mailbox: {mailbox}", exit_code=3)
+        criteria = "(UNSEEN)" if unseen else "ALL"
+        status, data = imap.search(None, criteria)
+        if status != "OK":
+            raise CLIError("IMAP search failed.", exit_code=3)
+        message_ids = (data[0] or b"").split()
+        selected_ids = list(reversed(message_ids))[:limit]
+        for msg_id in selected_ids:
+            inspected += 1
+            status, payload = imap.fetch(msg_id, "(RFC822)")
+            if status != "OK" or not payload:
+                errors += 1
+                continue
+            raw_email = payload[0][1] if isinstance(payload[0], tuple) and len(payload[0]) > 1 else b""
+            if not raw_email:
+                errors += 1
+                continue
+            msg = email.message_from_bytes(raw_email)
+            for part in msg.walk():
+                if part.get_content_disposition() != "attachment":
+                    continue
+                name = safe_filename(
+                    Path(_decode_mime_value(part.get_filename()) or "attachment.bin").name
+                )
+                if not name:
+                    skipped += 1
+                    continue
+                if not is_supported(Path(name)):
+                    skipped += 1
+                    continue
+                body = part.get_payload(decode=True) or b""
+                attachments_seen += 1
+                if dry_run:
+                    continue
+                fd, tmp_name = tempfile.mkstemp(
+                    prefix="imap-",
+                    suffix=Path(name).suffix.lower(),
+                    dir=str(config.runtime.tmp_dir),
+                )
+                tmp_path = Path(tmp_name)
+                try:
+                    with open(fd, "wb", closefd=True) as handle:
+                        handle.write(body)
+                    if as_json:
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            ingester.ingest_path(tmp_path, source_name=name)
+                    else:
+                        ingester.ingest_path(tmp_path, source_name=name)
+                    ingested += 1
+                except Exception:
+                    errors += 1
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+        db.close()
+
+    summary = {
+        "mailbox": mailbox,
+        "inspected_messages": inspected,
+        "attachments_seen": attachments_seen,
+        "ingested": ingested,
+        "skipped": skipped,
+        "errors": errors,
+        "dry_run": dry_run,
+    }
+    if as_json:
+        _emit_json(summary)
+        return
+    mode = "Dry run complete" if dry_run else "IMAP ingestion complete"
+    console.print(
+        f"[green]{mode}[/green] inspected={inspected} attachments={attachments_seen} "
+        f"ingested={ingested} skipped={skipped} errors={errors}"
+    )
 
 
 @main.command()

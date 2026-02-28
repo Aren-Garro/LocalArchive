@@ -7,6 +7,7 @@ import time
 import types
 import uuid
 import zipfile
+from email.message import EmailMessage
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -278,6 +279,139 @@ def test_backup_create_json_summary(monkeypatch):
     assert payload["path"].endswith("two.zip")
     assert payload["archive_file_count"] >= 1
     assert payload["pruned_count"] >= 1
+
+
+def test_connectors_imap_dry_run_json(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-imap-dry")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.ensure_dirs()
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    msg = EmailMessage()
+    msg["Subject"] = "Invoice"
+    msg["From"] = "sender@example.com"
+    msg["To"] = "user@example.com"
+    msg.set_content("Please see attachment.")
+    msg.add_attachment(
+        b"%PDF-1.4 fake attachment",
+        maintype="application",
+        subtype="pdf",
+        filename="invoice.pdf",
+    )
+    raw = msg.as_bytes()
+
+    class _FakeIMAP:
+        def __init__(self, _host: str):
+            self.logged_out = False
+
+        def login(self, _username: str, _password: str):
+            return ("OK", [b"logged in"])
+
+        def select(self, _mailbox: str):
+            return ("OK", [b"1"])
+
+        def search(self, _charset, _criteria):
+            return ("OK", [b"1"])
+
+        def fetch(self, _msg_id, _parts):
+            return ("OK", [(b"1 (RFC822 {100})", raw)])
+
+        def logout(self):
+            self.logged_out = True
+            return ("BYE", [b"logout"])
+
+    monkeypatch.setattr("localarchive.cli.imaplib.IMAP4_SSL", _FakeIMAP)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "connectors",
+            "imap",
+            "--host",
+            "imap.example.com",
+            "--username",
+            "user@example.com",
+            "--password",
+            "secret",
+            "--dry-run",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["dry_run"] is True
+    assert int(payload["attachments_seen"]) == 1
+    assert int(payload["ingested"]) == 0
+
+
+def test_connectors_imap_ingests_supported_attachment(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-imap-live")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.ensure_dirs()
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    msg = EmailMessage()
+    msg["Subject"] = "Receipt"
+    msg["From"] = "sender@example.com"
+    msg["To"] = "user@example.com"
+    msg.set_content("Attachment included.")
+    msg.add_attachment(
+        b"%PDF-1.4 fake attachment",
+        maintype="application",
+        subtype="pdf",
+        filename="receipt.pdf",
+    )
+    raw = msg.as_bytes()
+
+    class _FakeIMAP:
+        def __init__(self, _host: str):
+            pass
+
+        def login(self, _username: str, _password: str):
+            return ("OK", [b"logged in"])
+
+        def select(self, _mailbox: str):
+            return ("OK", [b"1"])
+
+        def search(self, _charset, _criteria):
+            return ("OK", [b"1"])
+
+        def fetch(self, _msg_id, _parts):
+            return ("OK", [(b"1 (RFC822 {100})", raw)])
+
+        def logout(self):
+            return ("BYE", [b"logout"])
+
+    monkeypatch.setattr("localarchive.cli.imaplib.IMAP4_SSL", _FakeIMAP)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "connectors",
+            "imap",
+            "--host",
+            "imap.example.com",
+            "--username",
+            "user@example.com",
+            "--password",
+            "secret",
+            "--all",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["dry_run"] is False
+    assert int(payload["ingested"]) == 1
+
+    db = Database(config.db_path)
+    db.initialize()
+    docs = db.list_documents(limit=10)
+    db.close()
+    assert len(docs) == 1
+    assert docs[0]["filename"] == "receipt.pdf"
 
 
 def test_backup_create_dry_run_json_no_side_effects(monkeypatch):
