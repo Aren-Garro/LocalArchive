@@ -427,3 +427,111 @@ def test_classify_tags_processed_documents(monkeypatch):
     tags = db.get_tags(doc_id)
     db.close()
     assert "invoice" in tags
+
+
+def test_process_dry_run_and_max_errors(monkeypatch):
+    class _FailingOCR:
+        def extract_text(self, image_path: Path) -> list[dict]:
+            raise RuntimeError("always fails")
+
+    tmp_path = _workspace_tmp_dir("localarchive-process-controls")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.processing.max_errors_per_run = 1
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    fake_ocr_module = types.SimpleNamespace(
+        get_ocr_engine=lambda _cfg: _FailingOCR(),
+        pdf_to_images=lambda _path, tmp_dir=None: [],
+        extract_text_from_pdf_native=lambda _path: "",
+    )
+    monkeypatch.setitem(sys.modules, "localarchive.core.ocr_engine", fake_ocr_module)
+
+    db = Database(config.db_path)
+    db.initialize()
+    for i in range(2):
+        source = tmp_path / f"bad-{i}.png"
+        source.write_bytes(b"bad")
+        db.insert_document(
+            filename=source.name,
+            filepath=str(source),
+            file_hash=f"bad-{i}",
+            file_type="png",
+            file_size=source.stat().st_size,
+            ingested_at="2026-01-01T00:00:00Z",
+            status="pending_ocr",
+        )
+    db.close()
+
+    runner = CliRunner()
+    dry = runner.invoke(main, ["process", "--dry-run"])
+    assert dry.exit_code == 0
+    assert "would process 2 document" in dry.output
+
+    live = runner.invoke(main, ["process", "--workers", "1", "--max-errors", "1"])
+    assert live.exit_code == 0
+    assert "Processing aborted" in live.output
+
+
+def test_doctor_json_output(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-doctor-json")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.ensure_dirs()
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    monkeypatch.setattr("importlib.util.find_spec", lambda _name: object())
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["doctor", "--json"])
+    assert result.exit_code == 0
+    assert '"checks"' in result.output
+
+
+def test_search_json_and_explain_ranking(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-search-json")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.insert_document(
+        filename="rank.pdf",
+        filepath=str(tmp_path / "rank.pdf"),
+        file_hash="rank-1",
+        file_type="pdf",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="receipt clinic amount",
+    )
+    db.close()
+
+    runner = CliRunner()
+    as_json = runner.invoke(main, ["search", "receipt", "--json"])
+    assert as_json.exit_code == 0
+    assert '"results"' in as_json.output
+
+    explained = runner.invoke(main, ["search", "receipt", "--explain-ranking"])
+    assert explained.exit_code == 0
+    assert "Ranking Explanation" in explained.output
+
+
+def test_verify_json_reports_issues(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-verify-json")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.insert_document(
+        filename="missing.pdf",
+        filepath=str(tmp_path / "missing.pdf"),
+        file_hash="missing",
+        file_type="pdf",
+        file_size=1,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["verify", "--json"])
+    assert result.exit_code == 4
+    assert '"issues"' in result.output

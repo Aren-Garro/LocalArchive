@@ -21,3 +21,10 @@ def test_config_validation_rejects_invalid_fuzzy_threshold():
     cfg.search.fuzzy_threshold = 1.5
     with pytest.raises(ValueError):
         cfg.validate()
+
+
+def test_config_validation_rejects_invalid_processing_limits():
+    cfg = Config()
+    cfg.processing.max_errors_per_run = 0
+    with pytest.raises(ValueError):
+        cfg.validate()

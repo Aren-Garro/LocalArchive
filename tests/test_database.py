@@ -187,3 +187,25 @@ def test_record_processing_error_and_retry_terminal():
     assert doc["status"] == "pending_ocr"
     assert doc["processing_attempts"] == 0
     db.close()
+
+
+def test_processing_run_checkpoint_and_backup_metadata():
+    db = _get_test_db()
+    run_id = db.start_processing_run(engine="paddleocr", extractor="regex")
+    db.update_processing_checkpoint(run_id, checkpoint_doc_id=42)
+    run = db.get_processing_run(run_id)
+    assert run is not None
+    assert run["checkpoint_doc_id"] == 42
+
+    latest = db.latest_processing_run()
+    assert latest is not None
+    assert latest["id"] == run_id
+
+    db.record_backup(path="/tmp/backup.zip", db_hash="abc", archive_file_count=3, verified=True)
+    backups = db.list_backups(limit=10)
+    assert backups
+    assert backups[0]["path"] == "/tmp/backup.zip"
+    db.finish_processing_run(run_id, status="aborted", processed=0, errors=1, aborted_reason="max_errors_exceeded:1")
+    run = db.get_processing_run(run_id)
+    assert run["aborted_reason"] == "max_errors_exceeded:1"
+    db.close()

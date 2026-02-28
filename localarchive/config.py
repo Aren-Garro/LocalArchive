@@ -52,6 +52,8 @@ class ProcessingConfig:
     default_limit: int = 50
     commit_batch_size: int = 20
     writer_flush_ms: int = 200
+    max_errors_per_run: int = 100
+    resume_checkpoint_interval: int = 50
 
 
 @dataclass
@@ -89,6 +91,9 @@ class ReliabilityConfig:
     integrity_check_on_startup: bool = False
     max_retries: int = 2
     checkpoint_batch_size: int = 25
+    auto_verify_after_restore: bool = True
+    backup_retention_count: int = 10
+    backup_verify_on_create: bool = True
 
 
 @dataclass
@@ -173,6 +178,14 @@ class Config:
                     default_limit=int(processing_data.get("default_limit", config.processing.default_limit)),
                     commit_batch_size=int(processing_data.get("commit_batch_size", config.processing.commit_batch_size)),
                     writer_flush_ms=int(processing_data.get("writer_flush_ms", config.processing.writer_flush_ms)),
+                    max_errors_per_run=int(
+                        processing_data.get("max_errors_per_run", config.processing.max_errors_per_run)
+                    ),
+                    resume_checkpoint_interval=int(
+                        processing_data.get(
+                            "resume_checkpoint_interval", config.processing.resume_checkpoint_interval
+                        )
+                    ),
                 )
             research_data = data.get("research", {})
             if research_data:
@@ -224,6 +237,17 @@ class Config:
                             "checkpoint_batch_size", config.reliability.checkpoint_batch_size
                         )
                     ),
+                    auto_verify_after_restore=bool(
+                        reliability_data.get(
+                            "auto_verify_after_restore", config.reliability.auto_verify_after_restore
+                        )
+                    ),
+                    backup_retention_count=int(
+                        reliability_data.get("backup_retention_count", config.reliability.backup_retention_count)
+                    ),
+                    backup_verify_on_create=bool(
+                        reliability_data.get("backup_verify_on_create", config.reliability.backup_verify_on_create)
+                    ),
                 )
         config.validate()
         return config
@@ -264,6 +288,10 @@ class Config:
             raise ValueError("processing.commit_batch_size must be >= 1")
         if self.processing.writer_flush_ms < 10:
             raise ValueError("processing.writer_flush_ms must be >= 10")
+        if self.processing.max_errors_per_run < 1:
+            raise ValueError("processing.max_errors_per_run must be >= 1")
+        if self.processing.resume_checkpoint_interval < 1:
+            raise ValueError("processing.resume_checkpoint_interval must be >= 1")
         if self.ui.default_limit < 1:
             raise ValueError("ui.default_limit must be >= 1")
         if self.ui.show_preview_chars < 20:
@@ -282,6 +310,8 @@ class Config:
             raise ValueError("reliability.max_retries must be >= 0")
         if self.reliability.checkpoint_batch_size < 1:
             raise ValueError("reliability.checkpoint_batch_size must be >= 1")
+        if self.reliability.backup_retention_count < 1:
+            raise ValueError("reliability.backup_retention_count must be >= 1")
 
     def save(self, config_path: Path = DEFAULT_CONFIG_PATH) -> None:
         if toml is None:
@@ -317,6 +347,8 @@ class Config:
                 "default_limit": self.processing.default_limit,
                 "commit_batch_size": self.processing.commit_batch_size,
                 "writer_flush_ms": self.processing.writer_flush_ms,
+                "max_errors_per_run": self.processing.max_errors_per_run,
+                "resume_checkpoint_interval": self.processing.resume_checkpoint_interval,
             },
             "research": {
                 "citation_styles": self.research.citation_styles,
@@ -344,6 +376,9 @@ class Config:
                 "integrity_check_on_startup": self.reliability.integrity_check_on_startup,
                 "max_retries": self.reliability.max_retries,
                 "checkpoint_batch_size": self.reliability.checkpoint_batch_size,
+                "auto_verify_after_restore": self.reliability.auto_verify_after_restore,
+                "backup_retention_count": self.reliability.backup_retention_count,
+                "backup_verify_on_create": self.reliability.backup_verify_on_create,
             },
         }
         with open(config_path, "w") as f:

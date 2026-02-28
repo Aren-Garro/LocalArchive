@@ -1,10 +1,11 @@
 """
 LocalArchive CLI - main entry point.
-Commands: init, ingest, search, export, tag, process, classify, reprocess, watch, doctor, collections, timeline, audit, backup, serve
+Commands: init, ingest, search, export, tag, process, classify, reprocess, watch, doctor, collections, timeline, audit, verify, backup, serve
 """
 
 import click
 import importlib.util
+import json
 import zipfile
 import shutil
 import sqlite3
@@ -21,6 +22,7 @@ from localarchive.config import Config, DEFAULT_CONFIG_PATH
 from localarchive.db.database import Database
 from localarchive.db.search import SearchEngine
 from localarchive.core.ingester import Ingester, watch_directory
+from localarchive.utils import file_hash
 
 console = Console()
 
@@ -109,6 +111,10 @@ def _validate_hybrid_weights(bm25_weight: float, vector_weight: float) -> tuple[
 def _validate_threshold(name: str, value: float) -> None:
     if not 0 <= value <= 1:
         raise CLIError(f"{name} must be between 0 and 1.", exit_code=2)
+
+
+def _emit_json(payload: dict | list) -> None:
+    click.echo(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
 
 
 def _classify_document(doc: dict, fields: list[dict]) -> tuple[str, float, list[str]]:
@@ -202,6 +208,8 @@ def ingest(path: str, profile: str):
 @click.option("--fuzzy", is_flag=True, help="Enable fuzzy OCR-tolerant fallback search.")
 @click.option("--fuzzy-threshold", default=None, type=float, help="Fuzzy match threshold (0-1).")
 @click.option("--fuzzy-max-candidates", default=None, type=int, help="Max fuzzy candidates to score.")
+@click.option("--explain-ranking", is_flag=True, help="Show ranking diagnostics for each result.")
+@click.option("--json", "as_json", is_flag=True, help="Emit results as JSON.")
 def search(
     query: str,
     tag: str,
@@ -214,6 +222,8 @@ def search(
     fuzzy: bool,
     fuzzy_threshold: float | None,
     fuzzy_max_candidates: int | None,
+    explain_ranking: bool,
+    as_json: bool,
 ):
     """Search documents in the archive."""
     config = get_config()
@@ -276,6 +286,32 @@ def search(
         console.print("[yellow]No results found.[/yellow]")
         db.close()
         return
+    if as_json:
+        payload = {
+            "query": query,
+            "count": len(results),
+            "semantic": bool(semantic and config.search.enable_semantic),
+            "fuzzy": bool(fuzzy_enabled),
+            "results": [],
+        }
+        for doc in results:
+            item = {
+                "id": int(doc["id"]),
+                "filename": doc["filename"],
+                "file_type": doc.get("file_type"),
+                "ingested_at": doc.get("ingested_at"),
+                "preview": (doc.get("ocr_text") or "")[:120],
+            }
+            if "rank" in doc:
+                item["rank"] = doc["rank"]
+            if "hybrid_score" in doc:
+                item["hybrid_score"] = doc["hybrid_score"]
+            if "fuzzy_score" in doc:
+                item["fuzzy_score"] = doc["fuzzy_score"]
+            payload["results"].append(item)
+        _emit_json(payload)
+        db.close()
+        return
     table = Table(title=f"Search: {query}")
     table.add_column("ID", style="cyan", width=6)
     table.add_column("Filename", style="bold")
@@ -286,6 +322,20 @@ def search(
         preview = (doc.get("ocr_text") or "")[:80]
         table.add_row(str(doc["id"]), doc["filename"], doc.get("file_type", "?"), doc.get("ingested_at", ""), preview)
     console.print(table)
+    if explain_ranking:
+        rank_table = Table(title="Ranking Explanation")
+        rank_table.add_column("ID", style="cyan", width=6)
+        rank_table.add_column("rank", width=12)
+        rank_table.add_column("hybrid", width=12)
+        rank_table.add_column("fuzzy", width=12)
+        for doc in results:
+            rank_table.add_row(
+                str(doc["id"]),
+                str(round(float(doc.get("rank", 0.0)), 6)) if "rank" in doc else "-",
+                str(doc.get("hybrid_score", "-")),
+                str(doc.get("fuzzy_score", "-")),
+            )
+        console.print(rank_table)
     console.print(f"\n[dim]{len(results)} result(s)[/dim]")
     db.close()
 
@@ -354,12 +404,20 @@ def tag(doc_id: int, tags: tuple[str]):
     default=None,
     help="Extraction strategy (defaults to config.extraction.strategy).",
 )
+@click.option("--dry-run", is_flag=True, help="Preview pending IDs and exit without processing.")
+@click.option("--max-errors", type=int, default=None, help="Abort run after this many errors.")
+@click.option("--resume", is_flag=True, help="Resume from latest processing checkpoint.")
+@click.option("--from-run", type=int, default=None, help="Resume from a specific processing run ID.")
 def process(
     limit: int | None,
     workers: int | None,
     commit_batch_size: int | None,
     checkpoint_every: int | None,
     extractor_mode: str | None,
+    dry_run: bool,
+    max_errors: int | None,
+    resume: bool,
+    from_run: int | None,
 ):
     """Run OCR and field extraction on pending documents."""
     from localarchive.core.ocr_engine import get_ocr_engine, pdf_to_images, extract_text_from_pdf_native
@@ -373,11 +431,29 @@ def process(
     _validate_limit(commit_size)
     checkpoint_size = checkpoint_every if checkpoint_every is not None else config.reliability.checkpoint_batch_size
     _validate_limit(checkpoint_size)
+    max_error_budget = max_errors if max_errors is not None else config.processing.max_errors_per_run
+    _validate_limit(max_error_budget)
     db = get_db(config)
     _run_integrity_check_if_enabled(config, db, "process")
-    pending = db.list_documents(status="pending_ocr", limit=max_docs)
+    resume_run = None
+    after_doc_id = 0
+    if from_run is not None:
+        resume_run = db.get_processing_run(from_run)
+        if not resume_run:
+            db.close()
+            raise CLIError(f"Processing run {from_run} not found.", exit_code=2)
+    elif resume:
+        resume_run = db.latest_processing_run()
+    if resume_run:
+        after_doc_id = int(resume_run.get("checkpoint_doc_id") or 0)
+    pending = db.list_documents_for_processing(limit=max_docs, after_doc_id=after_doc_id)
     if not pending:
-        console.print("[dim]No documents pending OCR.[/dim]")
+        console.print("[dim]No documents pending OCR for the selected scope.[/dim]")
+        db.close()
+        return
+    if dry_run:
+        doc_ids = [int(doc["id"]) for doc in pending]
+        console.print(f"[yellow]Dry run:[/yellow] would process {len(doc_ids)} document(s): {doc_ids}")
         db.close()
         return
     mode = extractor_mode or config.extraction.strategy
@@ -390,7 +466,9 @@ def process(
     event_buffer: list[dict] = []
     attempts_by_doc = {int(doc["id"]): int(doc.get("processing_attempts", 0)) for doc in pending}
     flush_ms = max(10, config.processing.writer_flush_ms)
+    checkpoint_interval = max(1, config.processing.resume_checkpoint_interval)
     last_flush_at = time.monotonic()
+    aborted_reason = ""
     console.print(f"Processing [bold]{len(pending)}[/bold] documents...\n")
     if config.runtime.fail_fast and worker_count > 1:
         console.print("[yellow]Fail-fast enabled; forcing single-worker processing for deterministic stop behavior.[/yellow]")
@@ -498,6 +576,10 @@ def process(
                 f"(processed={processed_count}, errors={error_count})[/dim]"
             )
         _flush_buffers(force=False)
+        if completed_count % checkpoint_interval == 0:
+            db.update_processing_checkpoint(run_id, checkpoint_doc_id=doc_id)
+        if error_count >= max_error_budget:
+            raise RuntimeError(f"max_errors_exceeded:{max_error_budget}")
 
     if worker_count == 1:
         for doc in pending:
@@ -505,8 +587,13 @@ def process(
                 result = _process_document(doc)
             except Exception as e:
                 result = {"doc_id": doc["id"], "filename": doc["filename"], "error": e}
-            _handle_result(result)
+            try:
+                _handle_result(result)
+            except RuntimeError as e:
+                aborted_reason = str(e)
+                break
             if config.runtime.fail_fast and result.get("error"):
+                aborted_reason = "fail_fast_triggered"
                 break
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -517,18 +604,40 @@ def process(
                     result = future.result()
                 except Exception as e:
                     result = {"doc_id": doc["id"], "filename": doc["filename"], "error": e}
-                _handle_result(result)
+                try:
+                    _handle_result(result)
+                except RuntimeError as e:
+                    aborted_reason = str(e)
+                    for pending_future in futures:
+                        if not pending_future.done():
+                            pending_future.cancel()
+                    break
     _flush_buffers(force=True)
-    final_status = "completed" if error_count == 0 else "completed_with_errors"
-    db.finish_processing_run(run_id, status=final_status, processed=processed_count, errors=error_count)
+    if completed_count > 0:
+        db.update_processing_checkpoint(run_id, checkpoint_doc_id=int(pending[min(completed_count, len(pending)) - 1]["id"]))
+    if aborted_reason:
+        final_status = "aborted"
+    else:
+        final_status = "completed" if error_count == 0 else "completed_with_errors"
+    db.finish_processing_run(
+        run_id,
+        status=final_status,
+        processed=processed_count,
+        errors=error_count,
+        aborted_reason=aborted_reason,
+    )
     db.close()
-    console.print("\n[green]Processing complete.[/green]")
+    if aborted_reason:
+        console.print(f"\n[yellow]Processing aborted:[/yellow] {aborted_reason}")
+    else:
+        console.print("\n[green]Processing complete.[/green]")
 
 
 @main.command()
 @click.option("--limit", default=200, type=int, help="Max processed documents to classify.")
 @click.option("--retag", is_flag=True, help="Replace existing category tags with new classification tag.")
-def classify(limit: int, retag: bool):
+@click.option("--explain", is_flag=True, help="Show rule hits that drove classification.")
+def classify(limit: int, retag: bool, explain: bool):
     """Auto-classify processed documents and apply category tags."""
     _validate_limit(limit)
     config = get_config()
@@ -548,9 +657,11 @@ def classify(limit: int, retag: bool):
     table.add_column("Label", width=10)
     table.add_column("Confidence", width=10)
     table.add_column("Action", width=12)
+    if explain:
+        table.add_column("Why", max_width=40)
     for doc in docs:
         fields = db.get_fields(int(doc["id"]))
-        label, confidence, _reasons = _classify_document(doc, fields)
+        label, confidence, reasons = _classify_document(doc, fields)
         action = "skipped"
         if label != "other" and confidence >= threshold and config.autopilot.auto_tag:
             current_tags = set(db.get_tags(int(doc["id"])))
@@ -569,7 +680,10 @@ def classify(limit: int, retag: bool):
                     skipped += 1
         else:
             skipped += 1
-        table.add_row(str(doc["id"]), str(doc.get("filename", "")), label, f"{confidence:.2f}", action)
+        row = [str(doc["id"]), str(doc.get("filename", "")), label, f"{confidence:.2f}", action]
+        if explain:
+            row.append(", ".join(reasons) if reasons else "-")
+        table.add_row(*row)
     console.print(table)
     console.print(f"[green]Updated:[/green] {updated}  [dim]Skipped:[/dim] {skipped}")
     db.close()
@@ -628,7 +742,8 @@ def watch(path: Path, interval: int | None, once: bool, fast_scan: bool):
 
 
 @main.command()
-def doctor():
+@click.option("--json", "as_json", is_flag=True, help="Emit doctor report as JSON.")
+def doctor(as_json: bool):
     """Check local dependencies and writable paths."""
     config = get_config()
     checks = []
@@ -647,6 +762,16 @@ def doctor():
         _check("easyocr_installed", importlib.util.find_spec("easyocr") is not None, "required by OCR config")
     else:
         _check("paddleocr_installed", importlib.util.find_spec("paddleocr") is not None, "required by OCR config")
+
+    if as_json:
+        payload = {
+            "checks": [{"name": n, "status": s, "detail": d} for n, s, d in checks],
+            "has_fail": any(s == "FAIL" for _, s, _ in checks),
+        }
+        _emit_json(payload)
+        if payload["has_fail"]:
+            raise CLIError("Doctor found failing checks.", exit_code=3)
+        return
 
     table = Table(title="LocalArchive Doctor")
     table.add_column("Check", style="bold")
@@ -685,11 +810,16 @@ def collections_auto_build(rules: str):
 
 
 @collections.command("list")
-def collections_list():
+@click.option("--json", "as_json", is_flag=True, help="Emit collections as JSON.")
+def collections_list(as_json: bool):
     """List collections and document counts."""
     config = get_config()
     db = get_db(config)
     rows = db.list_collections()
+    if as_json:
+        _emit_json({"count": len(rows), "collections": rows})
+        db.close()
+        return
     table = Table(title="Collections")
     table.add_column("ID", style="cyan", width=6)
     table.add_column("Name", style="bold")
@@ -703,12 +833,17 @@ def collections_list():
 @main.command()
 @click.option("--entity", type=click.Choice(["author", "topic", "journal"]), default="topic")
 @click.option("--limit", default=100, type=int)
-def timeline(entity: str, limit: int):
+@click.option("--json", "as_json", is_flag=True, help="Emit timeline as JSON.")
+def timeline(entity: str, limit: int, as_json: bool):
     """Show a chronological timeline by extracted entity."""
     _validate_limit(limit)
     config = get_config()
     db = get_db(config)
     rows = db.timeline_rows(entity=entity, limit=limit)
+    if as_json:
+        _emit_json({"entity": entity, "count": len(rows), "rows": rows})
+        db.close()
+        return
     table = Table(title=f"Timeline ({entity})")
     table.add_column("When", width=28)
     table.add_column("ID", style="cyan", width=6)
@@ -743,6 +878,37 @@ def audit(repair: bool):
     raise CLIError("Audit found issues.", exit_code=4)
 
 
+@main.command()
+@click.option("--full", "full_verify", is_flag=True, help="Run full integrity verification.")
+@click.option("--json", "as_json", is_flag=True, help="Emit verification report as JSON.")
+def verify(full_verify: bool, as_json: bool):
+    """Run archive verification with actionable output."""
+    config = get_config()
+    db = get_db(config)
+    report = db.audit_verify(repair=False)
+    db.close()
+    level = "full" if full_verify else "quick"
+    if as_json:
+        _emit_json({"mode": level, **report})
+        if report["issues"]:
+            raise CLIError("Verify found issues.", exit_code=4)
+        return
+    console.print(f"Verification mode: {level}")
+    console.print(f"Checked {report['checked']} documents.")
+    if not report["issues"]:
+        console.print("[green]Verify passed. No issues found.[/green]")
+        return
+    table = Table(title="Verification Issues")
+    table.add_column("Doc ID", width=8)
+    table.add_column("Issue")
+    table.add_column("Path/Detail")
+    for issue in report["issues"]:
+        table.add_row(str(issue.get("id") or "-"), issue["issue"], issue["path"])
+    console.print(table)
+    console.print("[yellow]Try running `localarchive audit --repair` for index-related issues.[/yellow]")
+    raise CLIError("Verify found issues.", exit_code=4)
+
+
 @main.group()
 def backup():
     """Create or restore local backups."""
@@ -761,6 +927,7 @@ def backup_create(backup_path: Path):
     if config.db_path.exists():
         with sqlite3.connect(str(config.db_path)) as src, sqlite3.connect(str(snapshot_path)) as dst:
             src.backup(dst)
+    archive_file_count = 0
     with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         if snapshot_path.exists():
             zf.write(snapshot_path, arcname="archive.db")
@@ -770,6 +937,27 @@ def backup_create(backup_path: Path):
             for p in config.archive_dir.rglob("*"):
                 if p.is_file():
                     zf.write(p, arcname=str(Path("archive_data") / p.relative_to(config.archive_dir)))
+                    archive_file_count += 1
+    db_hash = ""
+    verified = False
+    if config.reliability.backup_verify_on_create and backup_path.exists():
+        try:
+            db_hash = file_hash(backup_path)
+            verified = True
+        except Exception:
+            verified = False
+    db = get_db(config)
+    db.record_backup(str(backup_path), db_hash=db_hash, archive_file_count=archive_file_count, verified=verified)
+    backups = db.list_backups(limit=1000)
+    keep = max(1, config.reliability.backup_retention_count)
+    for old in backups[keep:]:
+        old_path = Path(old["path"])
+        try:
+            if old_path.exists():
+                old_path.unlink()
+        except Exception:
+            pass
+    db.close()
     try:
         snapshot_path.unlink(missing_ok=True)
     except PermissionError:
@@ -847,6 +1035,15 @@ def backup_restore(backup_path: Path):
                 shutil.move(str(staged), str(dest))
 
         console.print(f"[green]Backup restored from:[/green] {backup_path}")
+        if config.reliability.auto_verify_after_restore:
+            verify_db = get_db(config)
+            verify_report = verify_db.audit_verify(repair=False)
+            verify_db.close()
+            if verify_report["issues"]:
+                raise CLIError(
+                    f"Restore completed but verify found {len(verify_report['issues'])} issue(s).",
+                    exit_code=4,
+                )
     except Exception as exc:
         for created in created_paths:
             try:

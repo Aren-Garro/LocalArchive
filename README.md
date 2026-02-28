@@ -90,6 +90,11 @@ python -m localarchive.cli process
 # Process in parallel with batched DB commits
 python -m localarchive.cli process --workers 4 --commit-batch-size 20
 
+# Dry-run / resume controls for robust long runs
+python -m localarchive.cli process --dry-run
+python -m localarchive.cli process --resume
+python -m localarchive.cli process --from-run 12 --max-errors 10
+
 # Requeue failed documents for OCR retry
 python -m localarchive.cli reprocess --status error
 
@@ -105,6 +110,10 @@ python -m localarchive.cli search "graph neural nets" --semantic --bm25-weight 0
 # OCR-tolerant fuzzy search
 python -m localarchive.cli search "reciept clinic" --fuzzy
 
+# JSON and explainability output for automation/debugging
+python -m localarchive.cli search "receipt" --json
+python -m localarchive.cli search "receipt" --explain-ranking
+
 # Export results to CSV
 python -m localarchive.cli export --query "receipts" --format csv --output results.csv
 
@@ -113,12 +122,14 @@ python -m localarchive.cli tag DOC_ID "medical" "2024"
 
 # Auto-classify processed docs and apply category tags
 python -m localarchive.cli classify --limit 500
+python -m localarchive.cli classify --limit 200 --explain
 
 # Launch web UI (optional)
 python -m localarchive.cli serve
 
 # Environment and dependency checks
 python -m localarchive.cli doctor
+python -m localarchive.cli doctor --json
 
 # Build and inspect smart collections
 python -m localarchive.cli collections auto-build
@@ -130,6 +141,7 @@ python -m localarchive.cli timeline --entity topic
 # Integrity audit and optional repair
 python -m localarchive.cli audit
 python -m localarchive.cli audit --repair
+python -m localarchive.cli verify --json
 
 # Local backup / restore
 python -m localarchive.cli backup create --path localarchive-backup.zip
@@ -201,6 +213,8 @@ pdf_native_text_min_chars = 50
 default_limit = 50
 commit_batch_size = 20
 writer_flush_ms = 200
+max_errors_per_run = 100
+resume_checkpoint_interval = 50
 
 [research]
 citation_styles = ["apa"]
@@ -228,6 +242,9 @@ backup_interval = 86400
 integrity_check_on_startup = false
 max_retries = 2
 checkpoint_batch_size = 25
+auto_verify_after_restore = true
+backup_retention_count = 10
+backup_verify_on_create = true
 ```
 
 ## Roadmap

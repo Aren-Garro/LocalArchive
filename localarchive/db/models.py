@@ -100,7 +100,9 @@ CREATE TABLE IF NOT EXISTS processing_runs (
     engine        TEXT DEFAULT '',
     extractor     TEXT DEFAULT '',
     processed     INTEGER NOT NULL DEFAULT 0,
-    errors        INTEGER NOT NULL DEFAULT 0
+    errors        INTEGER NOT NULL DEFAULT 0,
+    checkpoint_doc_id INTEGER NOT NULL DEFAULT 0,
+    aborted_reason TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS processing_events (
@@ -117,6 +119,15 @@ CREATE TABLE IF NOT EXISTS document_embeddings (
     model          TEXT NOT NULL,
     vector_blob    BLOB NOT NULL,
     created_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS backups (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at          TEXT NOT NULL,
+    path                TEXT NOT NULL UNIQUE,
+    db_hash             TEXT DEFAULT '',
+    archive_file_count  INTEGER NOT NULL DEFAULT 0,
+    verified            INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);

@@ -6,7 +6,7 @@ from collections import defaultdict
 from localarchive.db.models import SCHEMA_SQL
 from localarchive.utils import timestamp_now, file_hash
 
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
 
 
 class Database:
@@ -122,6 +122,25 @@ class Database:
             self.conn.execute("UPDATE documents SET last_error_at = '' WHERE last_error_at IS NULL")
             self._set_schema_version(4)
 
+        if version < 5:
+            if not self._has_column("processing_runs", "checkpoint_doc_id"):
+                self.conn.execute("ALTER TABLE processing_runs ADD COLUMN checkpoint_doc_id INTEGER NOT NULL DEFAULT 0")
+            if not self._has_column("processing_runs", "aborted_reason"):
+                self.conn.execute("ALTER TABLE processing_runs ADD COLUMN aborted_reason TEXT DEFAULT ''")
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS backups (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at          TEXT NOT NULL,
+                    path                TEXT NOT NULL UNIQUE,
+                    db_hash             TEXT DEFAULT '',
+                    archive_file_count  INTEGER NOT NULL DEFAULT 0,
+                    verified            INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            self._set_schema_version(5)
+
     def close(self) -> None:
         if self._conn:
             self._conn.close()
@@ -198,6 +217,13 @@ class Database:
                 "SELECT * FROM documents WHERE status = ? ORDER BY updated_at DESC LIMIT ?",
                 (status, limit),
             ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_documents_for_processing(self, limit: int = 100, after_doc_id: int = 0) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM documents WHERE status = 'pending_ocr' AND id > ? ORDER BY id ASC LIMIT ?",
+            (after_doc_id, limit),
+        ).fetchall()
         return [dict(r) for r in rows]
 
     def document_exists_by_hash(self, file_hash: str) -> bool:
@@ -366,11 +392,27 @@ class Database:
 
     def start_processing_run(self, engine: str, extractor: str) -> int:
         cur = self.conn.execute(
-            "INSERT INTO processing_runs(started_at, status, engine, extractor) VALUES (?, 'running', ?, ?)",
+            "INSERT INTO processing_runs(started_at, status, engine, extractor, checkpoint_doc_id, aborted_reason) "
+            "VALUES (?, 'running', ?, ?, 0, '')",
             (timestamp_now(), engine, extractor),
         )
         self.conn.commit()
         return cur.lastrowid
+
+    def get_processing_run(self, run_id: int) -> dict | None:
+        row = self.conn.execute("SELECT * FROM processing_runs WHERE id = ?", (run_id,)).fetchone()
+        return dict(row) if row else None
+
+    def latest_processing_run(self) -> dict | None:
+        row = self.conn.execute("SELECT * FROM processing_runs ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+    def update_processing_checkpoint(self, run_id: int, checkpoint_doc_id: int) -> None:
+        self.conn.execute(
+            "UPDATE processing_runs SET checkpoint_doc_id = ? WHERE id = ?",
+            (checkpoint_doc_id, run_id),
+        )
+        self.conn.commit()
 
     def add_processing_event(self, run_id: int, event_type: str, message: str = "", document_id: int | None = None) -> None:
         self.conn.execute(
@@ -399,12 +441,30 @@ class Database:
         )
         self.conn.commit()
 
-    def finish_processing_run(self, run_id: int, status: str, processed: int, errors: int) -> None:
+    def finish_processing_run(
+        self, run_id: int, status: str, processed: int, errors: int, aborted_reason: str = ""
+    ) -> None:
         self.conn.execute(
-            "UPDATE processing_runs SET ended_at = ?, status = ?, processed = ?, errors = ? WHERE id = ?",
-            (timestamp_now(), status, processed, errors, run_id),
+            "UPDATE processing_runs SET ended_at = ?, status = ?, processed = ?, errors = ?, aborted_reason = ? "
+            "WHERE id = ?",
+            (timestamp_now(), status, processed, errors, aborted_reason, run_id),
         )
         self.conn.commit()
+
+    def record_backup(self, path: str, db_hash: str, archive_file_count: int, verified: bool) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO backups(created_at, path, db_hash, archive_file_count, verified) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (timestamp_now(), path, db_hash, int(archive_file_count), 1 if verified else 0),
+        )
+        self.conn.commit()
+
+    def list_backups(self, limit: int = 50) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM backups ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def upsert_collection(self, name: str, description: str = "") -> int:
         now = timestamp_now()
