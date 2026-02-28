@@ -268,6 +268,29 @@ def test_backup_list_prune_missing(monkeypatch):
     assert '"count": 0' in after.output
 
 
+def test_backup_list_missing_only(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-backup-missing-only")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    present = tmp_path / "present.zip"
+    present.write_bytes(b"x")
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.record_backup(path=str(present), db_hash="", archive_file_count=0, verified=False)
+    db.record_backup(path=str(tmp_path / "ghost.zip"), db_hash="", archive_file_count=0, verified=False)
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["backup", "list", "--json", "--missing-only"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert int(payload.get("count", 0)) == 1
+    assert payload["backups"][0]["path"].endswith("ghost.zip")
+    assert payload["backups"][0]["exists"] is False
+
+
 def test_backup_restore_rejects_unsafe_paths(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-unsafe-backup")
     config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")

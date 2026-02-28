@@ -1009,7 +1009,8 @@ def backup():
 @click.option("--limit", default=20, type=int, help="Max backups to show.")
 @click.option("--json", "as_json", is_flag=True, help="Emit backups as JSON.")
 @click.option("--prune-missing", is_flag=True, help="Remove records whose backup files no longer exist.")
-def backup_list(limit: int, as_json: bool, prune_missing: bool):
+@click.option("--missing-only", is_flag=True, help="Only show backups missing on disk.")
+def backup_list(limit: int, as_json: bool, prune_missing: bool, missing_only: bool):
     """List tracked backups."""
     _validate_limit(limit)
     config = get_config()
@@ -1026,6 +1027,8 @@ def backup_list(limit: int, as_json: bool, prune_missing: bool):
         r = dict(row)
         r["exists"] = Path(str(r.get("path", ""))).exists()
         enriched.append(r)
+    if missing_only:
+        enriched = [row for row in enriched if not bool(row.get("exists"))]
     db.close()
     if as_json:
         _emit_json({"count": len(enriched), "backups": enriched})
