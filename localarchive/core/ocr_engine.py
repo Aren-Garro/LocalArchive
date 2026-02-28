@@ -28,7 +28,14 @@ class PaddleOCREngine(BaseOCR):
     @property
     def engine(self):
         if self._engine is None:
-            from paddleocr import PaddleOCR
+            try:
+                from paddleocr import PaddleOCR
+            except ImportError as exc:
+                raise RuntimeError(
+                    "PaddleOCR backend is not installed. "
+                    "Install it with `pip install -r requirements-ocr-paddle.txt` "
+                    "or switch to `ocr.engine = \"easyocr\"` in config."
+                ) from exc
 
             self._engine = PaddleOCR(
                 use_angle_cls=True,
@@ -56,7 +63,14 @@ class EasyOCREngine(BaseOCR):
     @property
     def reader(self):
         if self._reader is None:
-            import easyocr
+            try:
+                import easyocr
+            except ImportError as exc:
+                raise RuntimeError(
+                    "EasyOCR backend is not installed. "
+                    "Install it with `pip install easyocr` or switch to "
+                    "`ocr.engine = \"paddleocr\"` in config."
+                ) from exc
 
             self._reader = easyocr.Reader(self.config.languages or ["en"], gpu=False)
         return self._reader

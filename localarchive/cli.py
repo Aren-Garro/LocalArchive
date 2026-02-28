@@ -733,10 +733,17 @@ def doctor(as_json: bool):
             "required by OCR config",
         )
     else:
+        has_paddleocr = importlib.util.find_spec("paddleocr") is not None
+        has_paddle = importlib.util.find_spec("paddle") is not None
         _check(
             "paddleocr_installed",
-            importlib.util.find_spec("paddleocr") is not None,
-            "required by OCR config",
+            has_paddleocr,
+            "required by OCR config (`pip install -r requirements-ocr-paddle.txt`)",
+        )
+        _check(
+            "paddlepaddle_installed",
+            has_paddle,
+            "required by PaddleOCR backend (`pip install -r requirements-ocr-paddle.txt`)",
         )
 
     if as_json:

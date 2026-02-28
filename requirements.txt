@@ -2,12 +2,8 @@
 click>=8.1
 pymupdf>=1.23
 Pillow>=10.0
-toml>=0.10
+toml>=0.10; python_version < "3.11"
 rich>=13.0
-
-# OCR (default: PaddleOCR)
-paddleocr>=2.7
-paddlepaddle>=2.5
 
 # NLP extraction
 spacy>=3.7
@@ -20,6 +16,9 @@ python-multipart>=0.0.6
 
 # Optional: alternative OCR
 # easyocr>=1.7
+
+# Optional: default OCR backend (install separately)
+# pip install -r requirements-ocr-paddle.txt
 
 # Optional: local LLM extraction
 # ollama>=0.1

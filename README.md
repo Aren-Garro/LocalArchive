@@ -42,7 +42,7 @@ localarchive/
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.10+ (recommended: Python 3.12 for best OCR dependency compatibility)
 - pip
 
 ### Install
@@ -56,12 +56,17 @@ cd LocalArchive
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# Install dependencies
+# Install core dependencies
 pip install -r requirements.txt
+
+# Install default OCR backend (optional but recommended for OCR commands)
+pip install -r requirements-ocr-paddle.txt
 
 # Initialize database
 python -m localarchive init
 ```
+
+If Paddle dependencies fail on very new Python versions (for example 3.14), use Python 3.12.
 
 ### CLI Invocation
 
@@ -74,6 +79,18 @@ python -m localarchive --help
 # Installed console script (after install)
 localarchive --help
 ```
+
+### Setup Troubleshooting
+
+```bash
+# Validate environment and dependency health
+python -m localarchive doctor
+```
+
+- If `paddleocr_installed` or `paddlepaddle_installed` fails:
+  - install OCR backend deps: `pip install -r requirements-ocr-paddle.txt`
+- If OCR deps still fail on your interpreter:
+  - recreate your virtualenv with Python 3.12 and reinstall.
 
 ### Docker (optional)
 
