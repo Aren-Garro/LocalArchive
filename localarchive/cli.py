@@ -1101,15 +1101,13 @@ def backup_create(backup_path: Path):
 
 @backup.command("restore")
 @click.option("--path", "backup_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
-def backup_restore(backup_path: Path):
+@click.option("--dry-run", is_flag=True, help="Show what would be restored without modifying local files.")
+@click.option("--json", "as_json", is_flag=True, help="Emit restore summary as JSON.")
+def backup_restore(backup_path: Path, dry_run: bool, as_json: bool):
     """Restore DB and archive data from a backup archive."""
     config = get_config()
     config.ensure_dirs()
     cfg_path = _runtime_ctx().get("config_path") or DEFAULT_CONFIG_PATH
-    staging_dir = Path(tempfile.mkdtemp(prefix="restore-", dir=str(config.runtime.tmp_dir)))
-    rollback_dir = Path(tempfile.mkdtemp(prefix="rollback-", dir=str(config.runtime.tmp_dir)))
-    moved_pairs: list[tuple[Path, Path]] = []
-    created_paths: list[Path] = []
     try:
         with zipfile.ZipFile(backup_path, "r") as zf:
             members = set(zf.namelist())
@@ -1117,6 +1115,55 @@ def backup_restore(backup_path: Path):
                 posix = PurePosixPath(name)
                 if posix.is_absolute() or ".." in posix.parts:
                     raise CLIError(f"Unsafe backup entry path: {name}", exit_code=2)
+            has_db = "archive.db" in members
+            has_config = "config.toml" in members
+            create_count = 0
+            overwrite_count = 0
+            archive_entries: list[str] = []
+            for name in members:
+                if not name.startswith("archive_data/") or name.endswith("/"):
+                    continue
+                rel = Path(*PurePosixPath(name).parts[1:])
+                archive_entries.append(name)
+                dest = config.archive_dir / rel
+                if dest.exists():
+                    overwrite_count += 1
+                else:
+                    create_count += 1
+            summary = {
+                "backup": str(backup_path),
+                "has_database": has_db,
+                "has_config": has_config,
+                "archive_files": len(archive_entries),
+                "would_create": create_count,
+                "would_overwrite": overwrite_count,
+            }
+    except CLIError:
+        raise
+    except Exception as exc:
+        raise CLIError(f"Backup restore failed: {exc}", exit_code=4) from exc
+
+    if dry_run:
+        payload = {"dry_run": True, **summary}
+        if as_json:
+            _emit_json(payload)
+            return
+        console.print("[bold]Restore Dry Run[/bold]")
+        console.print(f"Backup: {summary['backup']}")
+        console.print(f"Contains DB: {'yes' if summary['has_database'] else 'no'}")
+        console.print(f"Contains config: {'yes' if summary['has_config'] else 'no'}")
+        console.print(f"Archive files: {summary['archive_files']}")
+        console.print(f"Would create: {summary['would_create']}")
+        console.print(f"Would overwrite: {summary['would_overwrite']}")
+        return
+
+    staging_dir = Path(tempfile.mkdtemp(prefix="restore-", dir=str(config.runtime.tmp_dir)))
+    rollback_dir = Path(tempfile.mkdtemp(prefix="rollback-", dir=str(config.runtime.tmp_dir)))
+    moved_pairs: list[tuple[Path, Path]] = []
+    created_paths: list[Path] = []
+    verify_issue_count = 0
+    try:
+        with zipfile.ZipFile(backup_path, "r") as zf:
             if "archive.db" in members:
                 with zf.open("archive.db", "r") as src, open(staging_dir / "archive.db", "wb") as out:
                     out.write(src.read())
@@ -1167,16 +1214,21 @@ def backup_restore(backup_path: Path):
                     created_paths.append(dest)
                 shutil.move(str(staged), str(dest))
 
-        console.print(f"[green]Backup restored from:[/green] {backup_path}")
         if config.reliability.auto_verify_after_restore:
             verify_db = get_db(config)
             verify_report = verify_db.audit_verify(repair=False, full_check=False)
             verify_db.close()
+            verify_issue_count = len(verify_report.get("issues") or [])
             if verify_report["issues"]:
                 raise CLIError(
                     f"Restore completed but verify found {len(verify_report['issues'])} issue(s).",
                     exit_code=4,
                 )
+        payload = {"restored": True, **summary, "verify_issues": verify_issue_count}
+        if as_json:
+            _emit_json(payload)
+        else:
+            console.print(f"[green]Backup restored from:[/green] {backup_path}")
     except Exception as exc:
         for created in created_paths:
             try:

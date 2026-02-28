@@ -282,6 +282,37 @@ def test_backup_restore_rejects_unsafe_paths(monkeypatch):
     assert result.exit_code == 2
 
 
+def test_backup_restore_dry_run_summary(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-restore-dry-run")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    config.archive_dir.mkdir(parents=True, exist_ok=True)
+    existing = config.archive_dir / "keep.txt"
+    existing.write_text("old")
+    config.db_path.parent.mkdir(parents=True, exist_ok=True)
+    config.db_path.write_text("old-db")
+
+    backup_path = tmp_path / "restore.zip"
+    with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("archive.db", "new-db")
+        zf.writestr("archive_data/keep.txt", "new")
+        zf.writestr("archive_data/new.txt", "new")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["backup", "restore", "--path", str(backup_path), "--dry-run", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["dry_run"] is True
+    assert payload["has_database"] is True
+    assert payload["archive_files"] == 2
+    assert payload["would_create"] == 1
+    assert payload["would_overwrite"] == 1
+
+    assert existing.read_text() == "old"
+    assert config.db_path.read_text() == "old-db"
+
+
 def test_search_semantic_respects_config_gate(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-semantic-gate")
     config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
