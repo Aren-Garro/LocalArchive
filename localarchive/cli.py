@@ -508,7 +508,15 @@ def process(
     if dry_run:
         doc_ids = [int(doc["id"]) for doc in pending]
         if as_json:
-            _emit_json({"dry_run": True, "count": len(doc_ids), "doc_ids": doc_ids})
+            _emit_json(
+                {
+                    "dry_run": True,
+                    "count": len(doc_ids),
+                    "doc_ids": doc_ids,
+                    "resumed_from_run": int(resume_run.get("id")) if resume_run else None,
+                    "start_after_doc_id": after_doc_id,
+                }
+            )
         else:
             console.print(f"[yellow]Dry run:[/yellow] would process {len(doc_ids)} document(s): {doc_ids}")
         db.close()
@@ -697,6 +705,8 @@ def process(
                 "aborted_reason": aborted_reason,
                 "checkpoint_doc_id": int(run_meta.get("checkpoint_doc_id", 0) or 0),
                 "total_candidates": len(pending),
+                "resumed_from_run": int(resume_run.get("id")) if resume_run else None,
+                "start_after_doc_id": after_doc_id,
             }
         )
     elif aborted_reason:

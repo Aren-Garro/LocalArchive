@@ -768,8 +768,11 @@ def test_process_json_summary(monkeypatch):
     dry = runner.invoke(main, ["process", "--dry-run", "--json"])
     assert dry.exit_code == 0
     assert '"dry_run": true' in dry.output
+    assert '"resumed_from_run": null' in dry.output
+    assert '"start_after_doc_id": 0' in dry.output
 
     run = runner.invoke(main, ["process", "--json", "--workers", "1"])
     assert run.exit_code == 0
     assert '"run_id"' in run.output
     assert '"status": "completed"' in run.output
+    assert '"resumed_from_run": null' in run.output
