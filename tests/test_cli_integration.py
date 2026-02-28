@@ -701,6 +701,8 @@ def test_verify_json_reports_issues(monkeypatch):
     result = runner.invoke(main, ["verify", "--json"])
     assert result.exit_code == 4
     assert '"issues"' in result.output
+    assert '"issue_breakdown"' in result.output
+    assert '"recommendations"' in result.output
 
 
 def test_verify_quick_vs_full_hash_mismatch(monkeypatch):
@@ -730,6 +732,10 @@ def test_verify_quick_vs_full_hash_mismatch(monkeypatch):
     full = runner.invoke(main, ["verify", "--full", "--json"])
     assert full.exit_code == 4
     assert '"full_check": true' in full.output
+
+    full_text = runner.invoke(main, ["verify", "--full"])
+    assert full_text.exit_code == 4
+    assert "Issue breakdown:" in full_text.output
 
 
 def test_process_json_summary(monkeypatch):

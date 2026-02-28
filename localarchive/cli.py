@@ -117,6 +117,27 @@ def _emit_json(payload: dict | list) -> None:
     click.echo(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
 
 
+def _issue_breakdown(issues: list[dict]) -> dict:
+    breakdown: dict[str, int] = {}
+    for issue in issues:
+        key = str(issue.get("issue", "unknown"))
+        breakdown[key] = breakdown.get(key, 0) + 1
+    return breakdown
+
+
+def _issue_recommendations(breakdown: dict[str, int]) -> list[str]:
+    recs = []
+    if breakdown.get("missing_file"):
+        recs.append("Run `localarchive ingest <path>` to re-ingest missing documents.")
+    if breakdown.get("hash_mismatch") or breakdown.get("hash_error"):
+        recs.append("Run `localarchive audit --repair` and inspect source files for manual edits.")
+    if breakdown.get("fts_mismatch"):
+        recs.append("Run `localarchive audit --repair` to rebuild the FTS index.")
+    if not recs:
+        recs.append("No action required.")
+    return recs
+
+
 def _classify_document(doc: dict, fields: list[dict]) -> tuple[str, float, list[str]]:
     text = f"{doc.get('filename', '')} {doc.get('ocr_text', '')}".lower()
     field_types = {str(f.get("field_type", "")).lower() for f in fields}
@@ -941,8 +962,10 @@ def verify(full_verify: bool, as_json: bool):
     report = db.audit_verify(repair=False, full_check=full_verify)
     db.close()
     level = "full" if full_verify else "quick"
+    breakdown = _issue_breakdown(report["issues"])
+    recommendations = _issue_recommendations(breakdown)
     if as_json:
-        _emit_json({"mode": level, **report})
+        _emit_json({"mode": level, **report, "issue_breakdown": breakdown, "recommendations": recommendations})
         if report["issues"]:
             raise CLIError("Verify found issues.", exit_code=4)
         return
@@ -958,7 +981,11 @@ def verify(full_verify: bool, as_json: bool):
     for issue in report["issues"]:
         table.add_row(str(issue.get("id") or "-"), issue["issue"], issue["path"])
     console.print(table)
-    console.print("[yellow]Try running `localarchive audit --repair` for index-related issues.[/yellow]")
+    if breakdown:
+        summary = ", ".join(f"{k}={v}" for k, v in sorted(breakdown.items()))
+        console.print(f"[dim]Issue breakdown:[/dim] {summary}")
+    for rec in recommendations:
+        console.print(f"[yellow]- {rec}[/yellow]")
     raise CLIError("Verify found issues.", exit_code=4)
 
 
