@@ -87,6 +87,9 @@ python -m localarchive.cli watch ./documents/ --once
 # Process pending files (OCR + field extraction)
 python -m localarchive.cli process
 
+# Process in parallel with batched DB commits
+python -m localarchive.cli process --workers 4 --commit-batch-size 20
+
 # Requeue failed documents for OCR retry
 python -m localarchive.cli reprocess --status error
 
@@ -99,11 +102,17 @@ python -m localarchive.cli search "dentist 2024"
 # Hybrid search flags (semantic routing if enabled in config)
 python -m localarchive.cli search "graph neural nets" --semantic --bm25-weight 0.6 --vector-weight 0.4
 
+# OCR-tolerant fuzzy search
+python -m localarchive.cli search "reciept clinic" --fuzzy
+
 # Export results to CSV
 python -m localarchive.cli export --query "receipts" --format csv --output results.csv
 
 # Tag a document
 python -m localarchive.cli tag DOC_ID "medical" "2024"
+
+# Auto-classify processed docs and apply category tags
+python -m localarchive.cli classify --limit 500
 
 # Launch web UI (optional)
 python -m localarchive.cli serve
@@ -178,6 +187,8 @@ show_preview_chars = 300
 
 [watch]
 interval_seconds = 5
+manifest_path = "~/.localarchive/tmp/watch_manifest.json"
+manifest_gc_days = 30
 
 [runtime]
 max_workers = 1
@@ -188,6 +199,8 @@ cleanup_temp_files = true
 [processing]
 pdf_native_text_min_chars = 50
 default_limit = 50
+commit_batch_size = 20
+writer_flush_ms = 200
 
 [research]
 citation_styles = ["apa"]
@@ -206,6 +219,9 @@ embedding_model = "local-minilm"
 reranker = "none"
 snippet_chars = 300
 facet_defaults = ["file_type", "status", "tag"]
+enable_fuzzy = false
+fuzzy_threshold = 0.78
+fuzzy_max_candidates = 300
 
 [reliability]
 backup_interval = 86400
@@ -226,12 +242,13 @@ checkpoint_batch_size = 25
 - [x] Web UI with search and document detail viewer
 - [x] Folder watcher (auto-ingest new files)
 - [x] Ollama integration for smart extraction (optional/local)
+- [x] Parallel processing with worker threads and batched DB writes
+- [x] Fuzzy OCR-tolerant search fallback
+- [x] Rules-based document classification command (`classify`)
 
 ### Core Features (High Priority)
-- [ ] **Parallel processing** — Multi-core OCR and extraction to handle large document batches efficiently
-- [ ] **Smart document classification** — Auto-categorize by type (invoice, receipt, medical, research) using local ML models
+- [ ] **Learned smart classification** — Replace rules with stronger local ML model quality
 - [ ] **Table extraction** — Pull structured data from tables in PDFs and images
-- [ ] **Fuzzy search** — OCR-error tolerant search for better real-world usability
 - [ ] **Document similarity** — Auto-discover related documents in your archive
 - [ ] **Enhanced web UI** — Drag-and-drop upload, thumbnail previews, mobile-responsive design
 - [ ] **Multi-language OCR** — Expand beyond English with tested support for Spanish, French, German, Chinese, Arabic

@@ -1,6 +1,7 @@
 """Full-text search engine using SQLite FTS5."""
 
 import re
+from difflib import SequenceMatcher
 from localarchive.db.database import Database
 
 
@@ -79,6 +80,64 @@ class SearchEngine:
             scored.append(row)
 
         scored.sort(key=lambda d: d["hybrid_score"], reverse=True)
+        return scored[:limit]
+
+    def _fuzzy_score(self, query: str, haystack: str) -> float:
+        query_norm = " ".join(re.findall(r"[a-z0-9]+", query.lower()))
+        hay_norm = " ".join(re.findall(r"[a-z0-9]+", haystack.lower()))
+        if not query_norm or not hay_norm:
+            return 0.0
+        if query_norm in hay_norm:
+            return 1.0
+        query_tokens = query_norm.split()
+        hay_tokens = hay_norm.split()
+        if not query_tokens or not hay_tokens:
+            return 0.0
+        token_scores = []
+        for q in query_tokens:
+            best = max(SequenceMatcher(None, q, h).ratio() for h in hay_tokens)
+            token_scores.append(best)
+        return sum(token_scores) / len(token_scores)
+
+    def search_fuzzy(
+        self,
+        query: str,
+        limit: int = 20,
+        tag: str | None = None,
+        file_type: str | None = None,
+        status: str | None = None,
+        threshold: float = 0.78,
+        max_candidates: int = 300,
+    ) -> list[dict]:
+        base_query = "SELECT d.* FROM documents d"
+        where = []
+        params: list = []
+        if tag:
+            where.append(
+                "d.id IN (SELECT dt.document_id FROM document_tags dt JOIN tags t ON t.id = dt.tag_id WHERE t.name = ?)"
+            )
+            params.append(tag)
+        if file_type:
+            where.append("d.file_type = ?")
+            params.append(file_type)
+        if status:
+            where.append("d.status = ?")
+            params.append(status)
+        if where:
+            base_query += " WHERE " + " AND ".join(where)
+        base_query += " ORDER BY d.ingested_at DESC LIMIT ?"
+        params.append(max_candidates)
+        rows = self.db.conn.execute(base_query, params).fetchall()
+
+        scored = []
+        for row in rows:
+            doc = dict(row)
+            haystack = f"{doc.get('filename', '')} {doc.get('ocr_text', '')}"
+            score = self._fuzzy_score(query, haystack)
+            if score >= threshold:
+                doc["fuzzy_score"] = round(score, 6)
+                scored.append(doc)
+        scored.sort(key=lambda d: d["fuzzy_score"], reverse=True)
         return scored[:limit]
 
     def count(self, query: str, status: str | None = None) -> int:

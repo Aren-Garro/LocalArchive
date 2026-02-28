@@ -1,6 +1,6 @@
 """
 LocalArchive CLI - main entry point.
-Commands: init, ingest, search, export, tag, process, reprocess, watch, doctor, collections, timeline, audit, backup, serve
+Commands: init, ingest, search, export, tag, process, classify, reprocess, watch, doctor, collections, timeline, audit, backup, serve
 """
 
 import click
@@ -11,6 +11,7 @@ import sqlite3
 import tempfile
 import concurrent.futures
 import threading
+import time
 from uuid import uuid4
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -105,6 +106,49 @@ def _validate_hybrid_weights(bm25_weight: float, vector_weight: float) -> tuple[
     return bm25_weight / total, vector_weight / total
 
 
+def _validate_threshold(name: str, value: float) -> None:
+    if not 0 <= value <= 1:
+        raise CLIError(f"{name} must be between 0 and 1.", exit_code=2)
+
+
+def _classify_document(doc: dict, fields: list[dict]) -> tuple[str, float, list[str]]:
+    text = f"{doc.get('filename', '')} {doc.get('ocr_text', '')}".lower()
+    field_types = {str(f.get("field_type", "")).lower() for f in fields}
+    scores = {"invoice": 0.0, "receipt": 0.0, "medical": 0.0, "research": 0.0}
+    reasons: list[str] = []
+    keyword_weights = {
+        "invoice": {"invoice": 2.0, "due": 1.0, "balance": 1.0, "bill to": 1.0},
+        "receipt": {"receipt": 2.0, "subtotal": 1.0, "tax": 1.0, "cashier": 1.0},
+        "medical": {"patient": 2.0, "clinic": 1.0, "hospital": 1.0, "diagnosis": 2.0, "rx": 1.0},
+        "research": {"abstract": 2.0, "references": 1.5, "journal": 1.0, "method": 0.5},
+    }
+    for label, mapping in keyword_weights.items():
+        for token, weight in mapping.items():
+            if token in text:
+                scores[label] += weight
+                reasons.append(f"{label}:{token}")
+
+    if "doi" in field_types or "arxiv" in field_types:
+        scores["research"] += 2.0
+        reasons.append("research:doi/arxiv")
+    if "amount" in field_types:
+        scores["invoice"] += 0.8
+        scores["receipt"] += 0.8
+        reasons.append("invoice/receipt:amount")
+    if "date" in field_types and "amount" in field_types:
+        scores["invoice"] += 0.5
+        scores["receipt"] += 0.5
+    if "entity_person" in field_types and "medical" in text:
+        scores["medical"] += 0.5
+
+    best_label = max(scores, key=scores.get)
+    best_score = scores[best_label]
+    if best_score < 1.5:
+        return "other", 0.4, reasons[:4]
+    confidence = min(0.95, 0.5 + (best_score / 8.0))
+    return best_label, round(confidence, 2), reasons[:4]
+
+
 @main.command()
 @click.option("--rewrite-config", is_flag=True, help="Overwrite config file with defaults.")
 def init(rewrite_config: bool):
@@ -155,6 +199,9 @@ def ingest(path: str, profile: str):
 @click.option("--semantic", is_flag=True, help="Enable semantic scoring when configured.")
 @click.option("--bm25-weight", default=0.7, type=float, help="Hybrid BM25 weight.")
 @click.option("--vector-weight", default=0.3, type=float, help="Hybrid vector weight.")
+@click.option("--fuzzy", is_flag=True, help="Enable fuzzy OCR-tolerant fallback search.")
+@click.option("--fuzzy-threshold", default=None, type=float, help="Fuzzy match threshold (0-1).")
+@click.option("--fuzzy-max-candidates", default=None, type=int, help="Max fuzzy candidates to score.")
 def search(
     query: str,
     tag: str,
@@ -164,6 +211,9 @@ def search(
     semantic: bool,
     bm25_weight: float,
     vector_weight: float,
+    fuzzy: bool,
+    fuzzy_threshold: float | None,
+    fuzzy_max_candidates: int | None,
 ):
     """Search documents in the archive."""
     config = get_config()
@@ -187,12 +237,41 @@ def search(
         )
     else:
         results = engine.search(query, limit=max_results, tag=tag, file_type=file_type)
+    fuzzy_enabled = fuzzy or config.search.enable_fuzzy
+    if fuzzy_enabled:
+        threshold = fuzzy_threshold if fuzzy_threshold is not None else config.search.fuzzy_threshold
+        max_candidates = (
+            fuzzy_max_candidates if fuzzy_max_candidates is not None else config.search.fuzzy_max_candidates
+        )
+        _validate_threshold("fuzzy-threshold", threshold)
+        _validate_limit(max_candidates)
+        fuzzy_results = engine.search_fuzzy(
+            query,
+            limit=max_results,
+            tag=tag,
+            file_type=file_type,
+            threshold=threshold,
+            max_candidates=max_candidates,
+        )
+        if results:
+            seen = {int(doc["id"]) for doc in results}
+            for doc in fuzzy_results:
+                if int(doc["id"]) in seen:
+                    continue
+                results.append(doc)
+                seen.add(int(doc["id"]))
+                if len(results) >= max_results:
+                    break
+        else:
+            results = fuzzy_results
     if semantic and not config.search.enable_semantic:
         console.print("[yellow]Semantic search is disabled in config.search.enable_semantic; using BM25 only.[/yellow]")
     if semantic:
         console.print(
             f"[dim]Hybrid search request: bm25_weight={bm25_weight:.2f}, vector_weight={vector_weight:.2f}[/dim]"
         )
+    if fuzzy_enabled:
+        console.print(f"[dim]Fuzzy search enabled: threshold={threshold:.2f} candidates={max_candidates}[/dim]")
     if not results:
         console.print("[yellow]No results found.[/yellow]")
         db.close()
@@ -257,6 +336,12 @@ def tag(doc_id: int, tags: tuple[str]):
 @click.option("--limit", default=None, type=int, help="Max documents to process")
 @click.option("--workers", type=int, default=None, help="Worker count (defaults to runtime.max_workers).")
 @click.option(
+    "--commit-batch-size",
+    type=int,
+    default=None,
+    help="DB commit batch size (defaults to processing.commit_batch_size).",
+)
+@click.option(
     "--checkpoint-every",
     type=int,
     default=None,
@@ -269,7 +354,13 @@ def tag(doc_id: int, tags: tuple[str]):
     default=None,
     help="Extraction strategy (defaults to config.extraction.strategy).",
 )
-def process(limit: int | None, workers: int | None, checkpoint_every: int | None, extractor_mode: str | None):
+def process(
+    limit: int | None,
+    workers: int | None,
+    commit_batch_size: int | None,
+    checkpoint_every: int | None,
+    extractor_mode: str | None,
+):
     """Run OCR and field extraction on pending documents."""
     from localarchive.core.ocr_engine import get_ocr_engine, pdf_to_images, extract_text_from_pdf_native
     from localarchive.core.extractor import extract_fields
@@ -278,6 +369,8 @@ def process(limit: int | None, workers: int | None, checkpoint_every: int | None
     _validate_limit(max_docs)
     worker_count = workers if workers is not None else config.runtime.max_workers
     _validate_limit(worker_count)
+    commit_size = commit_batch_size if commit_batch_size is not None else config.processing.commit_batch_size
+    _validate_limit(commit_size)
     checkpoint_size = checkpoint_every if checkpoint_every is not None else config.reliability.checkpoint_batch_size
     _validate_limit(checkpoint_size)
     db = get_db(config)
@@ -292,6 +385,12 @@ def process(limit: int | None, workers: int | None, checkpoint_every: int | None
     processed_count = 0
     error_count = 0
     completed_count = 0
+    success_buffer: list[dict] = []
+    error_buffer: list[dict] = []
+    event_buffer: list[dict] = []
+    attempts_by_doc = {int(doc["id"]): int(doc.get("processing_attempts", 0)) for doc in pending}
+    flush_ms = max(10, config.processing.writer_flush_ms)
+    last_flush_at = time.monotonic()
     console.print(f"Processing [bold]{len(pending)}[/bold] documents...\n")
     if config.runtime.fail_fast and worker_count > 1:
         console.print("[yellow]Fail-fast enabled; forcing single-worker processing for deterministic stop behavior.[/yellow]")
@@ -335,33 +434,61 @@ def process(limit: int | None, workers: int | None, checkpoint_every: int | None
                 for img_path in temp_images:
                     img_path.unlink(missing_ok=True)
 
+    def _flush_buffers(force: bool = False):
+        nonlocal last_flush_at
+        buffer_size = len(success_buffer) + len(error_buffer)
+        elapsed_ms = (time.monotonic() - last_flush_at) * 1000
+        if not force and buffer_size < commit_size and elapsed_ms < flush_ms:
+            return
+        if success_buffer:
+            db.update_processed_documents_batch(success_buffer)
+            success_buffer.clear()
+        if error_buffer:
+            db.record_processing_errors_batch(error_buffer, max_retries=config.reliability.max_retries)
+            error_buffer.clear()
+        if event_buffer:
+            db.add_processing_events_batch(event_buffer)
+            event_buffer.clear()
+        last_flush_at = time.monotonic()
+
     def _handle_result(result: dict):
         nonlocal processed_count, error_count, completed_count
         doc_id = result["doc_id"]
         filename = result["filename"]
         error = result.get("error")
         if error:
-            retry_state = db.record_processing_error(doc_id, str(error), max_retries=config.reliability.max_retries)
-            db.add_processing_event(
-                run_id,
-                "error",
-                message=f"{error} (attempt {retry_state['attempts']}/{retry_state['max_retries']})",
-                document_id=doc_id,
+            attempts_by_doc[doc_id] = attempts_by_doc.get(doc_id, 0) + 1
+            terminal = attempts_by_doc[doc_id] >= config.reliability.max_retries
+            error_buffer.append({"doc_id": doc_id, "error": str(error)})
+            event_buffer.append(
+                {
+                    "run_id": run_id,
+                    "document_id": doc_id,
+                    "event_type": "error",
+                    "message": f"{error} (attempt {attempts_by_doc[doc_id]}/{config.reliability.max_retries})",
+                }
             )
             error_count += 1
-            if retry_state["terminal"]:
+            if terminal:
                 console.print(
                     f"  -> {filename}... [red]error[/red]: {error} "
-                    f"(attempt {retry_state['attempts']}/{retry_state['max_retries']}, max retries exceeded)"
+                    f"(attempt {attempts_by_doc[doc_id]}/{config.reliability.max_retries}, max retries exceeded)"
                 )
             else:
                 console.print(
                     f"  -> {filename}... [red]error[/red]: {error} "
-                    f"(attempt {retry_state['attempts']}/{retry_state['max_retries']})"
+                    f"(attempt {attempts_by_doc[doc_id]}/{config.reliability.max_retries})"
                 )
         else:
-            db.update_processed_document(doc_id, ocr_text=result["full_text"], fields=result["fields"])
-            db.add_processing_event(run_id, "processed", message=f"{len(result['fields'])} fields", document_id=doc_id)
+            success_buffer.append(result)
+            event_buffer.append(
+                {
+                    "run_id": run_id,
+                    "document_id": doc_id,
+                    "event_type": "processed",
+                    "message": f"{len(result['fields'])} fields",
+                }
+            )
             processed_count += 1
             console.print(f"  -> {filename}... [green]done[/green] ({len(result['fields'])} fields)")
         completed_count += 1
@@ -370,6 +497,7 @@ def process(limit: int | None, workers: int | None, checkpoint_every: int | None
                 f"[dim]Progress checkpoint: {completed_count}/{len(pending)} "
                 f"(processed={processed_count}, errors={error_count})[/dim]"
             )
+        _flush_buffers(force=False)
 
     if worker_count == 1:
         for doc in pending:
@@ -390,10 +518,61 @@ def process(limit: int | None, workers: int | None, checkpoint_every: int | None
                 except Exception as e:
                     result = {"doc_id": doc["id"], "filename": doc["filename"], "error": e}
                 _handle_result(result)
+    _flush_buffers(force=True)
     final_status = "completed" if error_count == 0 else "completed_with_errors"
     db.finish_processing_run(run_id, status=final_status, processed=processed_count, errors=error_count)
     db.close()
     console.print("\n[green]Processing complete.[/green]")
+
+
+@main.command()
+@click.option("--limit", default=200, type=int, help="Max processed documents to classify.")
+@click.option("--retag", is_flag=True, help="Replace existing category tags with new classification tag.")
+def classify(limit: int, retag: bool):
+    """Auto-classify processed documents and apply category tags."""
+    _validate_limit(limit)
+    config = get_config()
+    db = get_db(config)
+    docs = db.list_documents(status="processed", limit=limit)
+    if not docs:
+        console.print("[dim]No processed documents available for classification.[/dim]")
+        db.close()
+        return
+    category_tags = {"invoice", "receipt", "medical", "research", "other"}
+    threshold = config.autopilot.confidence_threshold
+    updated = 0
+    skipped = 0
+    table = Table(title="Classification Results")
+    table.add_column("ID", style="cyan", width=6)
+    table.add_column("Filename", style="bold")
+    table.add_column("Label", width=10)
+    table.add_column("Confidence", width=10)
+    table.add_column("Action", width=12)
+    for doc in docs:
+        fields = db.get_fields(int(doc["id"]))
+        label, confidence, _reasons = _classify_document(doc, fields)
+        action = "skipped"
+        if label != "other" and confidence >= threshold and config.autopilot.auto_tag:
+            current_tags = set(db.get_tags(int(doc["id"])))
+            if retag:
+                next_tags = sorted((current_tags - category_tags) | {label})
+                db.set_tags(int(doc["id"]), next_tags)
+                action = "retagged"
+                updated += 1
+            else:
+                if label not in current_tags:
+                    db.add_tag(int(doc["id"]), label)
+                    action = "tagged"
+                    updated += 1
+                else:
+                    action = "already"
+                    skipped += 1
+        else:
+            skipped += 1
+        table.add_row(str(doc["id"]), str(doc.get("filename", "")), label, f"{confidence:.2f}", action)
+    console.print(table)
+    console.print(f"[green]Updated:[/green] {updated}  [dim]Skipped:[/dim] {skipped}")
+    db.close()
 
 
 @main.command()
@@ -440,6 +619,8 @@ def watch(path: Path, interval: int | None, once: bool, fast_scan: bool):
             interval_seconds=poll_interval,
             run_once=once,
             fast_scan=fast_scan,
+            manifest_path=config.watch.manifest_path,
+            manifest_gc_days=config.watch.manifest_gc_days,
         )
         console.print(f"[green]Watcher finished. New documents ingested: {total}[/green]")
     finally:

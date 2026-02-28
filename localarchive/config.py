@@ -34,6 +34,8 @@ class ExtractionConfig:
 @dataclass
 class WatchConfig:
     interval_seconds: int = 5
+    manifest_path: Path = Path.home() / ".localarchive" / "tmp" / "watch_manifest.json"
+    manifest_gc_days: int = 30
 
 
 @dataclass
@@ -48,6 +50,8 @@ class RuntimeConfig:
 class ProcessingConfig:
     pdf_native_text_min_chars: int = 50
     default_limit: int = 50
+    commit_batch_size: int = 20
+    writer_flush_ms: int = 200
 
 
 @dataclass
@@ -74,6 +78,9 @@ class SearchConfig:
     reranker: str = "none"
     snippet_chars: int = 300
     facet_defaults: list[str] = field(default_factory=lambda: ["file_type", "status", "tag"])
+    enable_fuzzy: bool = False
+    fuzzy_threshold: float = 0.78
+    fuzzy_max_candidates: int = 300
 
 
 @dataclass
@@ -144,6 +151,10 @@ class Config:
             if watch_data:
                 config.watch = WatchConfig(
                     interval_seconds=int(watch_data.get("interval_seconds", config.watch.interval_seconds)),
+                    manifest_path=Path(
+                        os.path.expanduser(watch_data.get("manifest_path", str(config.watch.manifest_path)))
+                    ),
+                    manifest_gc_days=int(watch_data.get("manifest_gc_days", config.watch.manifest_gc_days)),
                 )
             runtime_data = data.get("runtime", {})
             if runtime_data:
@@ -160,6 +171,8 @@ class Config:
                         processing_data.get("pdf_native_text_min_chars", config.processing.pdf_native_text_min_chars)
                     ),
                     default_limit=int(processing_data.get("default_limit", config.processing.default_limit)),
+                    commit_batch_size=int(processing_data.get("commit_batch_size", config.processing.commit_batch_size)),
+                    writer_flush_ms=int(processing_data.get("writer_flush_ms", config.processing.writer_flush_ms)),
                 )
             research_data = data.get("research", {})
             if research_data:
@@ -190,6 +203,11 @@ class Config:
                     reranker=search_data.get("reranker", config.search.reranker),
                     snippet_chars=int(search_data.get("snippet_chars", config.search.snippet_chars)),
                     facet_defaults=list(search_data.get("facet_defaults", config.search.facet_defaults)),
+                    enable_fuzzy=bool(search_data.get("enable_fuzzy", config.search.enable_fuzzy)),
+                    fuzzy_threshold=float(search_data.get("fuzzy_threshold", config.search.fuzzy_threshold)),
+                    fuzzy_max_candidates=int(
+                        search_data.get("fuzzy_max_candidates", config.search.fuzzy_max_candidates)
+                    ),
                 )
             reliability_data = data.get("reliability", {})
             if reliability_data:
@@ -219,6 +237,11 @@ class Config:
             # Fall back to archive-local temp storage when home-level tmp is not writable.
             self.runtime.tmp_dir = self.archive_dir / ".tmp"
             self.runtime.tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.watch.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            self.watch.manifest_path = self.runtime.tmp_dir / "watch_manifest.json"
+            self.watch.manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     def validate(self) -> None:
         valid_strategies = {"regex", "spacy", "ollama", "hybrid"}
@@ -229,12 +252,18 @@ class Config:
             )
         if self.watch.interval_seconds < 1:
             raise ValueError("watch.interval_seconds must be >= 1")
+        if self.watch.manifest_gc_days < 1:
+            raise ValueError("watch.manifest_gc_days must be >= 1")
         if self.runtime.max_workers < 1:
             raise ValueError("runtime.max_workers must be >= 1")
         if self.processing.default_limit < 1:
             raise ValueError("processing.default_limit must be >= 1")
         if self.processing.pdf_native_text_min_chars < 0:
             raise ValueError("processing.pdf_native_text_min_chars must be >= 0")
+        if self.processing.commit_batch_size < 1:
+            raise ValueError("processing.commit_batch_size must be >= 1")
+        if self.processing.writer_flush_ms < 10:
+            raise ValueError("processing.writer_flush_ms must be >= 10")
         if self.ui.default_limit < 1:
             raise ValueError("ui.default_limit must be >= 1")
         if self.ui.show_preview_chars < 20:
@@ -243,6 +272,10 @@ class Config:
             raise ValueError("autopilot.confidence_threshold must be between 0 and 1")
         if self.search.snippet_chars < 50:
             raise ValueError("search.snippet_chars must be >= 50")
+        if not 0 <= self.search.fuzzy_threshold <= 1:
+            raise ValueError("search.fuzzy_threshold must be between 0 and 1")
+        if self.search.fuzzy_max_candidates < 1:
+            raise ValueError("search.fuzzy_max_candidates must be >= 1")
         if self.reliability.backup_interval < 60:
             raise ValueError("reliability.backup_interval must be >= 60")
         if self.reliability.max_retries < 0:
@@ -268,7 +301,11 @@ class Config:
                 "default_limit": self.ui.default_limit,
                 "show_preview_chars": self.ui.show_preview_chars,
             },
-            "watch": {"interval_seconds": self.watch.interval_seconds},
+            "watch": {
+                "interval_seconds": self.watch.interval_seconds,
+                "manifest_path": str(self.watch.manifest_path),
+                "manifest_gc_days": self.watch.manifest_gc_days,
+            },
             "runtime": {
                 "max_workers": self.runtime.max_workers,
                 "tmp_dir": str(self.runtime.tmp_dir),
@@ -278,6 +315,8 @@ class Config:
             "processing": {
                 "pdf_native_text_min_chars": self.processing.pdf_native_text_min_chars,
                 "default_limit": self.processing.default_limit,
+                "commit_batch_size": self.processing.commit_batch_size,
+                "writer_flush_ms": self.processing.writer_flush_ms,
             },
             "research": {
                 "citation_styles": self.research.citation_styles,
@@ -296,6 +335,9 @@ class Config:
                 "reranker": self.search.reranker,
                 "snippet_chars": self.search.snippet_chars,
                 "facet_defaults": self.search.facet_defaults,
+                "enable_fuzzy": self.search.enable_fuzzy,
+                "fuzzy_threshold": self.search.fuzzy_threshold,
+                "fuzzy_max_candidates": self.search.fuzzy_max_candidates,
             },
             "reliability": {
                 "backup_interval": self.reliability.backup_interval,

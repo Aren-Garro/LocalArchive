@@ -367,3 +367,63 @@ def test_process_failure_tracks_retries_and_cleans_temp_files(monkeypatch):
     assert doc["processing_attempts"] == 1
     assert "max_retries_exceeded" in doc["error_message"]
     assert temp_images and all(not p.exists() for p in temp_images)
+
+
+def test_search_fuzzy_finds_ocr_typos(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-fuzzy-search")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.search.enable_fuzzy = True
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.insert_document(
+        filename="receipt.pdf",
+        filepath=str(tmp_path / "receipt.pdf"),
+        file_hash="fuzzy-1",
+        file_type="pdf",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="reciept from clinic with total $21.00",
+    )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["search", "receipt clinic", "--fuzzy"])
+    assert result.exit_code == 0
+    assert "receipt.pdf" in result.output
+    assert "Fuzzy search enabled" in result.output
+
+
+def test_classify_tags_processed_documents(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-classify")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.autopilot.confidence_threshold = 0.6
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    doc_id = db.insert_document(
+        filename="invoice-2026.pdf",
+        filepath=str(tmp_path / "invoice-2026.pdf"),
+        file_hash="classify-1",
+        file_type="pdf",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="Invoice due amount total balance",
+    )
+    db.insert_fields(doc_id, [{"field_type": "amount", "value": "$42.00", "start": 1, "raw_match": "$42.00"}])
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["classify", "--limit", "10"])
+    assert result.exit_code == 0
+    assert "Classification Results" in result.output
+
+    db = Database(config.db_path)
+    db.initialize()
+    tags = db.get_tags(doc_id)
+    db.close()
+    assert "invoice" in tags

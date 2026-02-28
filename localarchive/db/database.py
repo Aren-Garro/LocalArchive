@@ -278,6 +278,27 @@ class Database:
             self.conn.rollback()
             raise
 
+    def update_processed_documents_batch(self, items: list[dict]) -> None:
+        if not items:
+            return
+        now = timestamp_now()
+        self.conn.execute("BEGIN")
+        try:
+            for item in items:
+                doc_id = int(item["doc_id"])
+                ocr_text = str(item.get("full_text", ""))
+                fields = item.get("fields", [])
+                self.conn.execute(
+                    "UPDATE documents SET ocr_text = ?, status = 'processed', error_message = '', "
+                    "last_processed_at = ?, updated_at = ?, processing_attempts = 0, last_error_at = '' WHERE id = ?",
+                    (ocr_text, now, now, doc_id),
+                )
+                self.replace_fields(doc_id, fields)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def record_processing_error(self, doc_id: int, error_message: str, max_retries: int) -> dict:
         row = self.conn.execute(
             "SELECT processing_attempts FROM documents WHERE id = ?",
@@ -298,6 +319,45 @@ class Database:
         self.conn.commit()
         return {"attempts": attempts, "terminal": terminal, "max_retries": max_retries}
 
+    def record_processing_errors_batch(self, items: list[dict], max_retries: int) -> list[dict]:
+        if not items:
+            return []
+        states = []
+        now = timestamp_now()
+        self.conn.execute("BEGIN")
+        try:
+            for item in items:
+                doc_id = int(item["doc_id"])
+                row = self.conn.execute(
+                    "SELECT processing_attempts FROM documents WHERE id = ?",
+                    (doc_id,),
+                ).fetchone()
+                previous_attempts = int(row["processing_attempts"]) if row else 0
+                attempts = previous_attempts + 1
+                terminal = max_retries >= 0 and attempts >= max_retries
+                message = str(item.get("error", ""))
+                if terminal:
+                    message = f"{message} (max_retries_exceeded)"
+                self.conn.execute(
+                    "UPDATE documents SET status = 'error', error_message = ?, processing_attempts = ?, "
+                    "last_error_at = ?, updated_at = ? WHERE id = ?",
+                    (message, attempts, now, now, doc_id),
+                )
+                states.append(
+                    {
+                        "doc_id": doc_id,
+                        "attempts": attempts,
+                        "terminal": terminal,
+                        "max_retries": max_retries,
+                        "message": message,
+                    }
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return states
+
     def get_fields(self, doc_id: int) -> list[dict]:
         rows = self.conn.execute(
             "SELECT * FROM extracted_fields WHERE document_id = ?", (doc_id,)
@@ -316,6 +376,26 @@ class Database:
         self.conn.execute(
             "INSERT INTO processing_events(run_id, document_id, event_type, message, created_at) VALUES (?, ?, ?, ?, ?)",
             (run_id, document_id, event_type, message, timestamp_now()),
+        )
+        self.conn.commit()
+
+    def add_processing_events_batch(self, events: list[dict]) -> None:
+        if not events:
+            return
+        now = timestamp_now()
+        payload = [
+            (
+                int(event["run_id"]),
+                event.get("document_id"),
+                str(event["event_type"]),
+                str(event.get("message", "")),
+                now,
+            )
+            for event in events
+        ]
+        self.conn.executemany(
+            "INSERT INTO processing_events(run_id, document_id, event_type, message, created_at) VALUES (?, ?, ?, ?, ?)",
+            payload,
         )
         self.conn.commit()
 

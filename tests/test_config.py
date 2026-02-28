@@ -14,3 +14,10 @@ def test_config_validation_rejects_invalid_strategy():
 def test_config_validation_accepts_defaults():
     cfg = Config()
     cfg.validate()
+
+
+def test_config_validation_rejects_invalid_fuzzy_threshold():
+    cfg = Config()
+    cfg.search.fuzzy_threshold = 1.5
+    with pytest.raises(ValueError):
+        cfg.validate()
