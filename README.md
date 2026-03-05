@@ -222,6 +222,8 @@ python -m localarchive sync export-log --output sync-log.json --since 2026-01-01
 python -m localarchive sync import-log --path sync-log.json --json
 python -m localarchive sync status --json
 python -m localarchive import refs --format bibtex --path refs.bib --json
+python -m localarchive import refs --format bibtex --path refs.bib --dry-run --json
+python -m localarchive import refs --format ris --path refs.ris --unresolved-output unresolved-refs.json --json
 python -m localarchive connectors imap --host imap.example.com --username user@example.com --dry-run --json
 python -m localarchive graph entities --json
 python -m localarchive review build --threshold 0.55 --json

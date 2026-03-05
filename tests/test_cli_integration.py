@@ -2256,3 +2256,83 @@ def test_import_refs_ris_matches_by_title_metadata(monkeypatch):
     assert meta["author"]["value"] == "Grace Hopper"
     assert meta["year"]["value"] == "2025"
     assert any(str(c["citation_value"]) == "10.5555/abcde" for c in citations)
+
+
+def test_import_refs_dry_run_and_unresolved_report(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-import-dry-run")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "dry-run.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="import-dry-run-1",
+        file_type="pdf",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.upsert_document_citation(
+        doc_id=doc_id,
+        citation_type="doi",
+        citation_value="10.1000/existing",
+        status="unresolved",
+        resolved_value="",
+    )
+    db.close()
+
+    refs = tmp_path / "refs.bib"
+    refs.write_text(
+        "@article{a,\n"
+        "  title = {Dry Run Title},\n"
+        "  author = {Test Author},\n"
+        "  year = {2026},\n"
+        "  doi = {10.1000/existing}\n"
+        "}\n"
+        "@article{b,\n"
+        "  title = {Unknown Paper},\n"
+        "  author = {Unknown Author},\n"
+        "  year = {2025}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    unresolved_path = tmp_path / "reports" / "unresolved.json"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "import",
+            "refs",
+            "--format",
+            "bibtex",
+            "--path",
+            str(refs),
+            "--dry-run",
+            "--unresolved-output",
+            str(unresolved_path),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    assert '"dry_run": true' in result.output
+    assert '"matched": 1' in result.output
+    assert '"planned_metadata_updates": 3' in result.output
+    assert '"metadata_updates": 0' in result.output
+    assert unresolved_path.exists()
+
+    unresolved_payload = json.loads(unresolved_path.read_text(encoding="utf-8"))
+    assert len(unresolved_payload["unresolved_entries"]) == 1
+    assert unresolved_payload["unresolved_entries"][0]["title"] == "Unknown Paper"
+
+    db = Database(config.db_path)
+    db.initialize()
+    meta = db.get_document_metadata(doc_id)
+    citations = db.list_document_citations(doc_id=doc_id, status="resolved", limit=10)
+    db.close()
+    assert meta == {}
+    assert citations == []

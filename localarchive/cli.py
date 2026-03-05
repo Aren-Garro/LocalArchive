@@ -2008,8 +2008,15 @@ def resources_show(resource_id: str):
 @import_group.command("refs")
 @click.option("--format", "fmt", type=click.Choice(["bibtex", "ris"]), required=True)
 @click.option("--path", "input_path", type=click.Path(dir_okay=False, exists=True, path_type=Path), required=True)
+@click.option("--dry-run", is_flag=True, help="Preview matches/updates without writing metadata.")
+@click.option(
+    "--unresolved-output",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Write unresolved reference entries to a JSON file.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
-def import_refs(fmt: str, input_path: Path, as_json: bool):
+def import_refs(fmt: str, input_path: Path, dry_run: bool, unresolved_output: Path | None, as_json: bool):
     """Import reference metadata and map onto local documents."""
     from localarchive.core.ref_importer import parse_bibtex, parse_ris
 
@@ -2018,8 +2025,10 @@ def import_refs(fmt: str, input_path: Path, as_json: bool):
     config = get_config()
     db = get_db(config)
     matched = 0
-    updated = 0
+    planned_updates = 0
+    applied_updates = 0
     unresolved = 0
+    unresolved_entries: list[dict[str, str]] = []
     for entry in entries:
         doi = str(entry.get("doi", "")).strip().lower()
         title = str(entry.get("title", "")).strip()
@@ -2066,42 +2075,72 @@ def import_refs(fmt: str, input_path: Path, as_json: bool):
             ).fetchone()
         if row is None:
             unresolved += 1
+            unresolved_entries.append(
+                {
+                    "title": title,
+                    "author": author,
+                    "year": year,
+                    "doi": doi,
+                }
+            )
             continue
         doc_id = int(row["document_id"])
         matched += 1
         if title:
-            db.set_document_metadata(doc_id, "title", title, source="import", confidence=1.0, updated_by="refs")
-            updated += 1
+            planned_updates += 1
+            if not dry_run:
+                db.set_document_metadata(doc_id, "title", title, source="import", confidence=1.0, updated_by="refs")
+                applied_updates += 1
         if author:
-            db.set_document_metadata(
-                doc_id, "author", author, source="import", confidence=1.0, updated_by="refs"
-            )
-            updated += 1
+            planned_updates += 1
+            if not dry_run:
+                db.set_document_metadata(
+                    doc_id, "author", author, source="import", confidence=1.0, updated_by="refs"
+                )
+                applied_updates += 1
         if year:
-            db.set_document_metadata(doc_id, "year", year, source="import", confidence=1.0, updated_by="refs")
-            updated += 1
+            planned_updates += 1
+            if not dry_run:
+                db.set_document_metadata(doc_id, "year", year, source="import", confidence=1.0, updated_by="refs")
+                applied_updates += 1
         if doi:
-            db.upsert_document_citation(
-                doc_id,
-                citation_type="doi",
-                citation_value=doi,
-                status="resolved",
-                resolved_value=doi,
-            )
+            if not dry_run:
+                db.upsert_document_citation(
+                    doc_id,
+                    citation_type="doi",
+                    citation_value=doi,
+                    status="resolved",
+                    resolved_value=doi,
+                )
+    unresolved_written = 0
+    if unresolved_output is not None:
+        unresolved_payload = {
+            "format": fmt,
+            "input": str(input_path),
+            "unresolved_entries": unresolved_entries,
+        }
+        unresolved_output.parent.mkdir(parents=True, exist_ok=True)
+        unresolved_output.write_text(json.dumps(unresolved_payload, indent=2), encoding="utf-8")
+        unresolved_written = len(unresolved_entries)
     db.close()
     payload = {
         "format": fmt,
         "input": str(input_path),
+        "dry_run": bool(dry_run),
         "entries": len(entries),
         "matched": matched,
-        "metadata_updates": updated,
+        "planned_metadata_updates": planned_updates,
+        "metadata_updates": applied_updates,
         "unresolved_entries": unresolved,
+        "unresolved_output": str(unresolved_output) if unresolved_output is not None else None,
+        "unresolved_written": unresolved_written,
     }
     if as_json:
         _emit_json(payload)
         return
     console.print(
-        f"[green]References imported:[/green] entries={len(entries)} matched={matched} updated={updated} unresolved={unresolved}"
+        f"[green]References imported:[/green] entries={len(entries)} matched={matched} "
+        f"planned_updates={planned_updates} updated={applied_updates} unresolved={unresolved}"
     )
 
 
