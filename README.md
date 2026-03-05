@@ -209,6 +209,8 @@ python -m localarchive collections auto-build
 python -m localarchive collections list
 python -m localarchive plugins list
 python -m localarchive plugins inspect demo_plugin --json
+python -m localarchive templates list
+python -m localarchive templates apply --template research_paper --all
 python -m localarchive connectors imap --host imap.example.com --username user@example.com --dry-run --json
 python -m localarchive graph entities --json
 python -m localarchive review build --threshold 0.55 --json
@@ -375,7 +377,7 @@ search_paths = ["~/.localarchive/plugins"]
 - [x] **Localization (i18n)** — Translate UI and documentation to make LocalArchive globally accessible
 - [x] **Docker containers** — One-command deployment for less technical users
 - [x] **Pre-built binaries** — Windows .exe, macOS .app, Linux AppImage for non-Python users
-- [ ] **Community template library** — Share extraction rules for common document types (W-2s, insurance forms, research papers)
+- [x] **Community template library** - Share extraction rules for common document types (W-2s, insurance forms, research papers)
 - [x] **Integration connectors** — Email ingestion (IMAP), folder sync daemons, workflow automation hooks
 - [ ] **Educational resources** — Video tutorials, use-case guides, academic partnership programs
 
@@ -391,6 +393,7 @@ search_paths = ["~/.localarchive/plugins"]
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
 
 
 

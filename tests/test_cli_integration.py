@@ -1792,3 +1792,52 @@ def test_duplicates_scan_detects_near_duplicate_images(monkeypatch):
     assert payload["duplicates"]
     pair_ids = {(int(p["doc_id_a"]), int(p["doc_id_b"])) for p in payload["duplicates"]}
     assert (1, 2) in pair_ids
+
+
+def test_templates_list_and_apply(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-templates")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="template-paper-1",
+        file_type="pdf",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="Abstract with references and DOI:10.1000/xyz",
+    )
+    db.close()
+
+    runner = CliRunner()
+    listed = runner.invoke(main, ["templates", "list", "--json"])
+    assert listed.exit_code == 0
+    assert '"id": "research_paper"' in listed.output
+
+    applied = runner.invoke(main, ["templates", "apply", "--template", "research_paper", "--all"])
+    assert applied.exit_code == 0
+    assert "Template applied" in applied.output
+
+    db = Database(config.db_path)
+    db.initialize()
+    tags = db.get_tags(doc_id)
+    db.close()
+    assert "research" in tags
+    assert "academic" in tags
+
+
+def test_templates_apply_validation(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-templates-validate")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    runner = CliRunner()
+    bad = runner.invoke(main, ["templates", "apply", "--template", "research_paper"])
+    assert bad.exit_code == 2
+    assert "Specify --doc-id or --all." in bad.output

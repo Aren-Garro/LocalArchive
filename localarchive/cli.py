@@ -1675,6 +1675,119 @@ def connectors():
     """Integration connectors (email, sync, automation)."""
 
 
+@main.group()
+def templates():
+    """Community document templates for common document types."""
+
+
+@templates.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def templates_list(as_json: bool):
+    """List built-in community templates."""
+    from localarchive.core.templates import list_templates
+
+    rows = list_templates()
+    if as_json:
+        _emit_json(
+            {
+                "count": len(rows),
+                "templates": [
+                    {
+                        "id": t.template_id,
+                        "title": t.title,
+                        "description": t.description,
+                        "tags": list(t.tags),
+                    }
+                    for t in rows
+                ],
+            }
+        )
+        return
+    table = Table(title="Community Template Library")
+    table.add_column("ID", style="cyan", width=20)
+    table.add_column("Title", style="bold")
+    table.add_column("Description")
+    table.add_column("Tags", width=24)
+    for item in rows:
+        table.add_row(item.template_id, item.title, item.description, ", ".join(item.tags))
+    console.print(table)
+
+
+@templates.command("apply")
+@click.option("--template", "template_id", required=True, help="Template ID to apply.")
+@click.option("--doc-id", type=int, default=None, help="Apply to a single document ID.")
+@click.option("--all", "apply_all", is_flag=True, help="Apply to matching documents in the archive.")
+@click.option("--limit", default=1000, type=int, help="Max documents to scan with --all.")
+@click.option("--dry-run", is_flag=True, help="Show matches without writing tags.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def templates_apply(
+    template_id: str,
+    doc_id: int | None,
+    apply_all: bool,
+    limit: int,
+    dry_run: bool,
+    as_json: bool,
+):
+    """Apply a template's tag set to matching documents."""
+    from localarchive.core.templates import get_template, matches_template
+
+    _validate_limit(limit)
+    if apply_all and doc_id is not None:
+        raise CLIError("Use either --doc-id or --all, not both.", exit_code=2)
+    if not apply_all and doc_id is None:
+        raise CLIError("Specify --doc-id or --all.", exit_code=2)
+    template = get_template(template_id)
+    if template is None:
+        raise CLIError(f"Template not found: {template_id}", exit_code=2)
+
+    config = get_config()
+    db = get_db(config)
+    candidates: list[dict] = []
+    if doc_id is not None:
+        doc = db.get_document(doc_id)
+        if not doc:
+            db.close()
+            raise CLIError(f"Document {doc_id} not found.", exit_code=2)
+        candidates = [doc]
+    else:
+        candidates = db.list_documents(limit=limit)
+
+    matched: list[dict] = []
+    for doc in candidates:
+        if matches_template(
+            template,
+            filename=str(doc.get("filename", "")),
+            text=str(doc.get("ocr_text", "")),
+        ):
+            matched.append({"id": int(doc["id"]), "filename": str(doc.get("filename", ""))})
+            if not dry_run:
+                for tag in template.tags:
+                    db.add_tag(int(doc["id"]), tag)
+    db.close()
+    payload = {
+        "template": template.template_id,
+        "dry_run": bool(dry_run),
+        "scanned": len(candidates),
+        "matched": len(matched),
+        "tag_count": len(template.tags),
+        "documents": matched,
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    if dry_run:
+        console.print(
+            f"[yellow]Template dry run:[/yellow] {template.template_id} matched {len(matched)} of {len(candidates)} document(s)."
+        )
+    else:
+        console.print(
+            f"[green]Template applied:[/green] {template.template_id} matched {len(matched)} of {len(candidates)} document(s)."
+        )
+    if matched:
+        sample = ", ".join(f"{m['id']}:{m['filename']}" for m in matched[:5])
+        console.print(f"[dim]Matches: {sample}[/dim]")
+
+
 @connectors.command("imap")
 @click.option("--host", required=True, help="IMAP host (for example: imap.gmail.com).")
 @click.option("--username", required=True, help="IMAP username or email address.")
