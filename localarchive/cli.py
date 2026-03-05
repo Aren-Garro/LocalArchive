@@ -1,7 +1,7 @@
 """
 LocalArchive CLI - main entry point.
 Commands: init, ingest, search, export, tag, process, classify, reprocess, watch,
-doctor, collections, timeline, audit, verify, backup, duplicates, review, graph, serve, gui
+doctor, collections, timeline, audit, verify, backup, duplicates, review, graph, citations, serve, gui
 """
 
 import imaplib  # noqa: F401 - compatibility for tests monkeypatching localarchive.cli.imaplib
@@ -913,6 +913,57 @@ def similarity():
 def graph():
     """Build and export relationship graphs."""
     pass
+
+
+@main.group()
+def citations():
+    """Extract citation identifiers and bibliography candidates."""
+    pass
+
+
+@citations.command("extract")
+@click.option("--limit", default=1000, type=int, help="Max documents to scan.")
+@click.option("--status", default="processed", help="Optional status filter.")
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["json", "markdown"]),
+    default="json",
+    help="Output format.",
+)
+def citations_extract(limit: int, status: str, fmt: str):
+    """Extract DOI/arXiv citation identifiers across documents."""
+    _validate_limit(limit)
+    from localarchive.core.citations import collect_citations
+
+    config = get_config()
+    db = get_db(config)
+    docs = db.list_documents(limit=limit, status=status or None)
+    citations_out: list[dict] = []
+    for doc in docs:
+        fields = db.get_fields(int(doc["id"]))
+        citations_out.extend(collect_citations(doc, fields))
+    db.close()
+
+    deduped: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in citations_out:
+        key = (str(item["type"]), str(item["value"]).lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    if fmt == "json":
+        _emit_json({"count": len(deduped), "citations": deduped})
+        return
+    if not deduped:
+        console.print("No citation candidates found.")
+        return
+    lines = ["# Citation Candidates", ""]
+    for row in deduped:
+        lines.append(f"- `{row['type']}` {row['value']} (source: {row['source']})")
+    click.echo("\n".join(lines))
 
 
 @graph.command("entities")

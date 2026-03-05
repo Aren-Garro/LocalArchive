@@ -1578,6 +1578,41 @@ def test_review_queue_build_list_and_resolve(monkeypatch):
     assert listed_after_payload["items"][0]["status"] == "resolved"
 
 
+def test_citations_extract_json(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-citations")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    doc_id = db.insert_document(
+        filename="paper.pdf",
+        filepath=str(tmp_path / "paper.pdf"),
+        file_hash="cite-1",
+        file_type="pdf",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="See DOI 10.1145/1234567.8901234 and arXiv: 2401.01234v2",
+    )
+    db.insert_fields(
+        doc_id,
+        [
+            {"field_type": "doi", "value": "10.1145/1234567.8901234", "raw_match": "", "start": 0},
+        ],
+    )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["citations", "extract", "--format", "json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert int(payload["count"]) >= 2
+    types = {str(item.get("type")) for item in payload["citations"]}
+    assert "doi" in types
+    assert "arxiv" in types
+
+
 def test_duplicates_scan_detects_near_duplicate_images(monkeypatch):
     pytest.importorskip("PIL")
     from PIL import Image

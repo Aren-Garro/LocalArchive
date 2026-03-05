@@ -213,6 +213,7 @@ python -m localarchive graph entities --json
 python -m localarchive review build --threshold 0.55 --json
 python -m localarchive review list --json
 python -m localarchive review resolve 42 --note "validated by operator"
+python -m localarchive citations extract --format json
 
 # Timeline view by extracted entity
 python -m localarchive timeline --entity topic
@@ -381,7 +382,7 @@ search_paths = ["~/.localarchive/plugins"]
 - [x] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
 - [ ] **Redaction tools** — Privacy-safe document sharing with automated PII removal
 - [ ] **Version control** — Track document changes over time
-- [ ] **Citation extraction** — Auto-build bibliographies from research papers
+- [x] **Citation extraction** — Auto-build bibliographies from research papers
 
 ## License
 
