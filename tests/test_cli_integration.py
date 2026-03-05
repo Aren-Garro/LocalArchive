@@ -1498,6 +1498,44 @@ def test_similarity_build_and_query(monkeypatch):
     assert '"related_id": 2' in related.output
 
 
+def test_graph_entities_json(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-entity-graph")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    doc_id = db.insert_document(
+        filename="graph.pdf",
+        filepath=str(tmp_path / "graph.pdf"),
+        file_hash="graph-1",
+        file_type="pdf",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="ACME by Alice",
+    )
+    db.insert_fields(
+        doc_id,
+        [
+            {"field_type": "entity_org", "value": "ACME", "raw_match": "ACME", "start": 0},
+            {"field_type": "entity_person", "value": "Alice", "raw_match": "Alice", "start": 10},
+        ],
+    )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["graph", "entities", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert int(payload["documents"]) == 1
+    node_ids = {str(n.get("id", "")) for n in payload["nodes"]}
+    assert "doc:1" in node_ids
+    assert "entity:entity_org:acme" in node_ids
+    assert "entity:entity_person:alice" in node_ids
+    assert payload["edges"]
+
+
 def test_duplicates_scan_detects_near_duplicate_images(monkeypatch):
     pytest.importorskip("PIL")
     from PIL import Image

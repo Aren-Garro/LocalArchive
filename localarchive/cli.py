@@ -1,7 +1,7 @@
 """
 LocalArchive CLI - main entry point.
 Commands: init, ingest, search, export, tag, process, classify, reprocess, watch,
-doctor, collections, timeline, audit, verify, backup, duplicates, serve, gui
+doctor, collections, timeline, audit, verify, backup, duplicates, graph, serve, gui
 """
 
 import imaplib  # noqa: F401 - compatibility for tests monkeypatching localarchive.cli.imaplib
@@ -907,6 +907,57 @@ def collections_list(as_json: bool):
 def similarity():
     """Build and inspect local document similarity edges."""
     pass
+
+
+@main.group()
+def graph():
+    """Build and export relationship graphs."""
+    pass
+
+
+@graph.command("entities")
+@click.option("--limit", default=500, type=int, help="Max documents to include.")
+@click.option("--status", default="processed", help="Optional document status filter.")
+@click.option("--json", "as_json", is_flag=True, help="Emit graph in JSON.")
+def graph_entities(limit: int, status: str, as_json: bool):
+    """Build document-to-entity relationship graph."""
+    _validate_limit(limit)
+    from localarchive.core.entity_graph import build_entity_graph
+
+    config = get_config()
+    db = get_db(config)
+    docs = db.list_documents(limit=limit, status=status or None)
+    fields_by_doc = {int(doc["id"]): db.get_fields(int(doc["id"])) for doc in docs}
+    db.close()
+    graph_payload = build_entity_graph(docs, fields_by_doc)
+    if as_json:
+        _emit_json(
+            {
+                "documents": len(docs),
+                "nodes": graph_payload["nodes"],
+                "edges": graph_payload["edges"],
+            }
+        )
+        return
+
+    entity_nodes = [n for n in graph_payload["nodes"] if str(n.get("kind")) == "entity"]
+    console.print(
+        f"[green]Entity graph built:[/green] docs={len(docs)} entities={len(entity_nodes)} edges={len(graph_payload['edges'])}"
+    )
+    if not entity_nodes:
+        console.print("[dim]No entity nodes found. Run `localarchive process --extractor hybrid` first.[/dim]")
+        return
+    table = Table(title="Top Entity Nodes")
+    table.add_column("Type", width=16)
+    table.add_column("Entity", style="bold")
+    counts: dict[str, int] = {}
+    for edge in graph_payload["edges"]:
+        tgt = str(edge.get("target", ""))
+        counts[tgt] = counts.get(tgt, 0) + 1
+    ranked = sorted(entity_nodes, key=lambda n: counts.get(str(n["id"]), 0), reverse=True)[:15]
+    for node in ranked:
+        table.add_row(str(node.get("entity_type", "")), str(node.get("label", "")))
+    console.print(table)
 
 
 @similarity.command("build")

@@ -209,6 +209,7 @@ python -m localarchive collections list
 python -m localarchive plugins list
 python -m localarchive plugins inspect demo_plugin --json
 python -m localarchive connectors imap --host imap.example.com --username user@example.com --dry-run --json
+python -m localarchive graph entities --json
 
 # Timeline view by extracted entity
 python -m localarchive timeline --entity topic
@@ -371,7 +372,7 @@ search_paths = ["~/.localarchive/plugins"]
 - [ ] **Educational resources** — Video tutorials, use-case guides, academic partnership programs
 
 ### Advanced Intelligence (Future)
-- [ ] **Entity relationship graphs** — Visualize connections between documents (invoice → payment → receipt)
+- [x] **Entity relationship graphs** — Visualize connections between documents (invoice → payment → receipt)
 - [ ] **Multi-device sync (CRDT)** — Local-first sync without cloud dependency
 - [x] **Duplicate detection** — Perceptual hashing to identify duplicate scans
 - [ ] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
