@@ -1857,3 +1857,59 @@ def test_resources_list_and_show(monkeypatch):
     assert shown.exit_code == 0
     assert "Getting Started with LocalArchive" in shown.output
     assert "python -m localarchive init" in shown.output
+
+
+def test_sync_snapshot_and_merge(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-sync")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    file_a = tmp_path / "a.pdf"
+    file_b = tmp_path / "b.pdf"
+    file_a.write_bytes(b"%PDF-1.4 a")
+    file_b.write_bytes(b"%PDF-1.4 b")
+    doc_a = db.insert_document(
+        filename=file_a.name,
+        filepath=str(file_a),
+        file_hash="sync-hash-a",
+        file_type="pdf",
+        file_size=file_a.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.insert_document(
+        filename=file_b.name,
+        filepath=str(file_b),
+        file_hash="sync-hash-b",
+        file_type="pdf",
+        file_size=file_b.stat().st_size,
+        ingested_at="2026-01-01T00:00:01Z",
+        status="processed",
+    )
+    db.add_tag(doc_a, "local")
+    db.close()
+
+    runner = CliRunner()
+    snapshot_path = tmp_path / "snapshot.json"
+    snap = runner.invoke(main, ["sync", "snapshot", "--output", str(snapshot_path), "--json"])
+    assert snap.exit_code == 0
+    assert snapshot_path.exists()
+
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    for item in payload["docs"]:
+        if item["file_hash"] == "sync-hash-a":
+            item["tags"] = ["local", "remote-added"]
+    snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    merged = runner.invoke(main, ["sync", "merge", "--input", str(snapshot_path), "--json"])
+    assert merged.exit_code == 0
+    assert '"updated_docs": 1' in merged.output
+
+    db = Database(config.db_path)
+    db.initialize()
+    tags = db.get_tags(doc_a)
+    db.close()
+    assert "local" in tags
+    assert "remote-added" in tags

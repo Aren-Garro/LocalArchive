@@ -213,6 +213,8 @@ python -m localarchive templates list
 python -m localarchive templates apply --template research_paper --all
 python -m localarchive resources list
 python -m localarchive resources show getting-started
+python -m localarchive sync snapshot --output device-sync.json
+python -m localarchive sync merge --input device-sync.json --json
 python -m localarchive connectors imap --host imap.example.com --username user@example.com --dry-run --json
 python -m localarchive graph entities --json
 python -m localarchive review build --threshold 0.55 --json
@@ -385,7 +387,7 @@ search_paths = ["~/.localarchive/plugins"]
 
 ### Advanced Intelligence (Future)
 - [x] **Entity relationship graphs** — Visualize connections between documents (invoice → payment → receipt)
-- [ ] **Multi-device sync (CRDT)** — Local-first sync without cloud dependency
+- [x] **Multi-device sync (CRDT)** - Local-first metadata snapshot/merge for cross-device tag synchronization
 - [x] **Duplicate detection** — Perceptual hashing to identify duplicate scans
 - [x] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
 - [x] **Redaction tools** — Privacy-safe document sharing with automated PII removal
@@ -395,6 +397,7 @@ search_paths = ["~/.localarchive/plugins"]
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
 
 
 

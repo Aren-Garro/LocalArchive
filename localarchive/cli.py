@@ -1315,6 +1315,12 @@ def review():
     pass
 
 
+@main.group()
+def sync():
+    """Local-first metadata sync helpers (snapshot + merge)."""
+    pass
+
+
 @review.command("build")
 @click.option("--limit", default=500, type=int, help="Max documents to evaluate.")
 @click.option("--status", default="processed", help="Optional document status filter.")
@@ -1868,6 +1874,92 @@ def connectors_imap(
         limit=limit,
         dry_run=dry_run,
         as_json=as_json,
+    )
+
+
+@sync.command("snapshot")
+@click.option(
+    "--output", "output_path", type=click.Path(dir_okay=False, path_type=Path), required=True
+)
+@click.option("--limit", default=50000, type=int, help="Max documents to include.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def sync_snapshot(output_path: Path, limit: int, as_json: bool):
+    """Export a metadata snapshot for offline device-to-device sync."""
+    _validate_limit(limit)
+    config = get_config()
+    db = get_db(config)
+    docs = db.list_documents(limit=limit)
+    payload_docs = []
+    for doc in docs:
+        payload_docs.append(
+            {
+                "file_hash": str(doc.get("file_hash", "")),
+                "filename": str(doc.get("filename", "")),
+                "status": str(doc.get("status", "")),
+                "tags": db.get_tags(int(doc["id"])),
+            }
+        )
+    db.close()
+    bundle = {
+        "format": "localarchive.sync.snapshot.v1",
+        "doc_count": len(payload_docs),
+        "docs": payload_docs,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(bundle, indent=2, ensure_ascii=False), encoding="utf-8")
+    if as_json:
+        _emit_json({"written": True, "path": str(output_path), "doc_count": len(payload_docs)})
+        return
+    console.print(f"[green]Sync snapshot written:[/green] {output_path} ({len(payload_docs)} docs)")
+
+
+@sync.command("merge")
+@click.option(
+    "--input", "input_path", type=click.Path(dir_okay=False, exists=True, path_type=Path), required=True
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def sync_merge(input_path: Path, as_json: bool):
+    """Merge a sync snapshot into local metadata using CRDT-style tag union."""
+    config = get_config()
+    db = get_db(config)
+    raw = json.loads(input_path.read_text(encoding="utf-8"))
+    docs = list(raw.get("docs") or [])
+    matched = 0
+    updated = 0
+    unmatched = 0
+    for entry in docs:
+        file_hash_val = str(entry.get("file_hash", "")).strip()
+        if not file_hash_val:
+            continue
+        row = db.conn.execute(
+            "SELECT id FROM documents WHERE file_hash = ? LIMIT 1",
+            (file_hash_val,),
+        ).fetchone()
+        if not row:
+            unmatched += 1
+            continue
+        matched += 1
+        doc_id = int(row["id"])
+        existing = set(db.get_tags(doc_id))
+        incoming = {str(tag).strip() for tag in (entry.get("tags") or []) if str(tag).strip()}
+        merged = existing | incoming
+        if merged != existing:
+            db.set_tags(doc_id, sorted(merged))
+            updated += 1
+    db.close()
+    payload = {
+        "merged": True,
+        "path": str(input_path),
+        "incoming_docs": len(docs),
+        "matched_docs": matched,
+        "updated_docs": updated,
+        "unmatched_docs": unmatched,
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(
+        f"[green]Sync merge complete:[/green] matched={matched} updated={updated} unmatched={unmatched}"
     )
 
 
