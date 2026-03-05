@@ -1676,6 +1676,51 @@ def connectors():
 
 
 @main.group()
+def resources():
+    """Educational guides and learning resources."""
+
+
+@resources.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def resources_list(as_json: bool):
+    """List educational resources."""
+    from localarchive.core.resources import list_resources
+
+    rows = list_resources()
+    payload = {
+        "count": len(rows),
+        "resources": [
+            {"id": row.resource_id, "title": row.title, "path": row.path}
+            for row in rows
+        ],
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    table = Table(title="Educational Resources")
+    table.add_column("ID", style="cyan", width=20)
+    table.add_column("Title", style="bold")
+    table.add_column("Path")
+    for row in rows:
+        table.add_row(row.resource_id, row.title, row.path)
+    console.print(table)
+
+
+@resources.command("show")
+@click.argument("resource_id")
+def resources_show(resource_id: str):
+    """Print a resource by ID."""
+    from localarchive.core.resources import get_resource, read_resource_text
+
+    resource = get_resource(resource_id)
+    if resource is None:
+        raise CLIError(f"Resource not found: {resource_id}", exit_code=2)
+    console.print(f"[bold]{resource.title}[/bold]")
+    console.print(f"[dim]{resource.path}[/dim]\n")
+    console.print(read_resource_text(resource))
+
+
+@main.group()
 def templates():
     """Community document templates for common document types."""
 

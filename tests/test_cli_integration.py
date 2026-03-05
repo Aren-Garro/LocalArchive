@@ -1841,3 +1841,19 @@ def test_templates_apply_validation(monkeypatch):
     bad = runner.invoke(main, ["templates", "apply", "--template", "research_paper"])
     assert bad.exit_code == 2
     assert "Specify --doc-id or --all." in bad.output
+
+
+def test_resources_list_and_show(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-resources")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    runner = CliRunner()
+    listed = runner.invoke(main, ["resources", "list", "--json"])
+    assert listed.exit_code == 0
+    assert '"id": "getting-started"' in listed.output
+
+    shown = runner.invoke(main, ["resources", "show", "getting-started"])
+    assert shown.exit_code == 0
+    assert "Getting Started with LocalArchive" in shown.output
+    assert "python -m localarchive init" in shown.output
