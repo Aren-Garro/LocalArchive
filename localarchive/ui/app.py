@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from localarchive.config import Config
 from localarchive.core.ingester import Ingester
 from localarchive.db.database import Database
-from localarchive.db.search import SearchEngine
+from localarchive.db.search import InvalidSearchQueryError, SearchEngine
 from localarchive.utils import is_supported, safe_filename
 
 
@@ -295,21 +295,24 @@ def _fetch_index_results(
     q: str, tag: str, file_type: str, status: str, page_limit: int, offset: int
 ) -> tuple[list[dict], int]:
     if q:
-        results = search_engine.search(
-            q,
-            limit=page_limit,
-            offset=offset,
-            tag=tag or None,
-            file_type=file_type or None,
-            status=status or None,
-        )
-        total = search_engine.count(
-            q,
-            tag=tag or None,
-            file_type=file_type or None,
-            status=status or None,
-        )
-        return results, total
+        try:
+            results = search_engine.search(
+                q,
+                limit=page_limit,
+                offset=offset,
+                tag=tag or None,
+                file_type=file_type or None,
+                status=status or None,
+            )
+            total = search_engine.count(
+                q,
+                tag=tag or None,
+                file_type=file_type or None,
+                status=status or None,
+            )
+            return results, total
+        except InvalidSearchQueryError:
+            return [], 0
 
     results = search_engine.recent(limit=page_limit, offset=offset, status=status or None)
     return results, _status_count(status)
@@ -578,6 +581,7 @@ async def ingest_upload(
     if not files:
         return _with_lang_cookie(RedirectResponse(url=f"/ingest?lang={language}", status_code=303), language, request)
     ingester = Ingester(config, _db)
+    max_upload_bytes = int(config.ui.max_upload_file_bytes)
     for upload in files:
         original_name = safe_filename(Path(upload.filename or "upload.bin").name)
         if not original_name:
@@ -588,12 +592,20 @@ async def ingest_upload(
         fd, tmp_name = tempfile.mkstemp(prefix="upload-", suffix=suffix, dir=str(config.runtime.tmp_dir))
         tmp_path = Path(tmp_name)
         try:
+            total_bytes = 0
+            too_large = False
             with open(fd, "wb", closefd=True) as out:
                 while True:
                     chunk = await upload.read(1024 * 1024)
                     if not chunk:
                         break
+                    total_bytes += len(chunk)
+                    if total_bytes > max_upload_bytes:
+                        too_large = True
+                        break
                     out.write(chunk)
+            if too_large:
+                continue
             ingester.ingest_path(tmp_path, source_name=original_name)
         finally:
             try:

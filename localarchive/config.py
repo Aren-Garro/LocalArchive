@@ -133,6 +133,8 @@ class ReliabilityConfig:
     auto_verify_after_restore: bool = True
     backup_retention_count: int = 10
     backup_verify_on_create: bool = True
+    max_imap_message_bytes: int = 25 * 1024 * 1024
+    max_imap_attachment_bytes: int = 10 * 1024 * 1024
 
 
 @dataclass
@@ -150,6 +152,7 @@ class UIConfig:
     default_limit: int = 20
     show_preview_chars: int = 300
     language: str = "en"
+    max_upload_file_bytes: int = 25 * 1024 * 1024
 
 
 def _expand_path(raw: str) -> Path:
@@ -192,6 +195,9 @@ def _apply_ui(config: "Config", data: dict) -> None:
         default_limit=int(data.get("default_limit", config.ui.default_limit)),
         show_preview_chars=int(data.get("show_preview_chars", config.ui.show_preview_chars)),
         language=str(data.get("language", config.ui.language)),
+        max_upload_file_bytes=int(
+            data.get("max_upload_file_bytes", config.ui.max_upload_file_bytes)
+        ),
     )
 
 
@@ -299,6 +305,12 @@ def _apply_reliability(config: "Config", data: dict) -> None:
         ),
         backup_verify_on_create=bool(
             data.get("backup_verify_on_create", config.reliability.backup_verify_on_create)
+        ),
+        max_imap_message_bytes=int(
+            data.get("max_imap_message_bytes", config.reliability.max_imap_message_bytes)
+        ),
+        max_imap_attachment_bytes=int(
+            data.get("max_imap_attachment_bytes", config.reliability.max_imap_attachment_bytes)
         ),
     )
 
@@ -423,6 +435,8 @@ class Config:
             raise ValueError("ui.default_limit must be >= 1")
         if self.ui.show_preview_chars < 20:
             raise ValueError("ui.show_preview_chars must be >= 20")
+        if self.ui.max_upload_file_bytes < 1:
+            raise ValueError("ui.max_upload_file_bytes must be >= 1")
         ui_language = str(self.ui.language).strip()
         if len(ui_language) != 2 or not ui_language.isalpha():
             raise ValueError("ui.language must be a 2-letter language code (for example: en, es)")
@@ -452,6 +466,10 @@ class Config:
             raise ValueError("reliability.checkpoint_batch_size must be >= 1")
         if self.reliability.backup_retention_count < 1:
             raise ValueError("reliability.backup_retention_count must be >= 1")
+        if self.reliability.max_imap_message_bytes < 1:
+            raise ValueError("reliability.max_imap_message_bytes must be >= 1")
+        if self.reliability.max_imap_attachment_bytes < 1:
+            raise ValueError("reliability.max_imap_attachment_bytes must be >= 1")
 
     def _validate_plugins(self) -> None:
         if any(not str(name).strip() for name in self.plugins.enabled):
@@ -478,6 +496,7 @@ class Config:
                 "default_limit": self.ui.default_limit,
                 "show_preview_chars": self.ui.show_preview_chars,
                 "language": self.ui.language,
+                "max_upload_file_bytes": self.ui.max_upload_file_bytes,
             },
             "watch": {
                 "interval_seconds": self.watch.interval_seconds,
@@ -529,6 +548,8 @@ class Config:
                 "auto_verify_after_restore": self.reliability.auto_verify_after_restore,
                 "backup_retention_count": self.reliability.backup_retention_count,
                 "backup_verify_on_create": self.reliability.backup_verify_on_create,
+                "max_imap_message_bytes": self.reliability.max_imap_message_bytes,
+                "max_imap_attachment_bytes": self.reliability.max_imap_attachment_bytes,
             },
             "plugins": {
                 "enabled": self.plugins.enabled,

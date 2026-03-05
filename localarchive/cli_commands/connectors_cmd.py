@@ -4,12 +4,29 @@ import contextlib
 import email
 import io
 import os
+import re
 import tempfile
 from pathlib import Path
 
 from localarchive import cli as c
 from localarchive.core.ingester import Ingester
 from localarchive.utils import is_supported, safe_filename
+
+
+def _extract_rfc822_size(payload: list) -> int | None:
+    for item in payload or []:
+        if isinstance(item, tuple) and item:
+            head = item[0]
+        elif isinstance(item, (bytes, bytearray)):
+            head = item
+        else:
+            continue
+        if isinstance(head, str):
+            head = head.encode("utf-8", errors="ignore")
+        match = re.search(rb"RFC822\.SIZE\s+(\d+)", bytes(head))
+        if match:
+            return int(match.group(1))
+    return None
 
 
 def run_connectors_imap(
@@ -40,6 +57,8 @@ def run_connectors_imap(
     ingested = 0
     skipped = 0
     errors = 0
+    max_message_bytes = int(config.reliability.max_imap_message_bytes)
+    max_attachment_bytes = int(config.reliability.max_imap_attachment_bytes)
 
     imap = c.imaplib.IMAP4_SSL(host)
     try:
@@ -55,6 +74,15 @@ def run_connectors_imap(
         selected_ids = list(reversed(message_ids))[:limit]
         for msg_id in selected_ids:
             inspected += 1
+            try:
+                status, size_payload = imap.fetch(msg_id, "(RFC822.SIZE)")
+            except Exception:
+                status, size_payload = ("ERR", [])
+            if status == "OK":
+                msg_size = _extract_rfc822_size(size_payload)
+                if msg_size is not None and msg_size > max_message_bytes:
+                    skipped += 1
+                    continue
             status, payload = imap.fetch(msg_id, "(RFC822)")
             if status != "OK" or not payload:
                 errors += 1
@@ -62,6 +90,9 @@ def run_connectors_imap(
             raw_email = payload[0][1] if isinstance(payload[0], tuple) and len(payload[0]) > 1 else b""
             if not raw_email:
                 errors += 1
+                continue
+            if len(raw_email) > max_message_bytes:
+                skipped += 1
                 continue
             msg = email.message_from_bytes(raw_email)
             for part in msg.walk():
@@ -78,6 +109,9 @@ def run_connectors_imap(
                     continue
                 body = part.get_payload(decode=True) or b""
                 attachments_seen += 1
+                if len(body) > max_attachment_bytes:
+                    skipped += 1
+                    continue
                 if dry_run:
                     continue
                 fd, tmp_name = tempfile.mkstemp(

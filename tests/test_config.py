@@ -35,3 +35,22 @@ def test_config_validation_rejects_invalid_ui_language():
     cfg.ui.language = "english"
     with pytest.raises(ValueError):
         cfg.validate()
+
+
+def test_config_validation_rejects_invalid_upload_size_limit():
+    cfg = Config()
+    cfg.ui.max_upload_file_bytes = 0
+    with pytest.raises(ValueError):
+        cfg.validate()
+
+
+def test_config_validation_rejects_invalid_imap_limits():
+    cfg = Config()
+    cfg.reliability.max_imap_message_bytes = 0
+    with pytest.raises(ValueError):
+        cfg.validate()
+
+    cfg = Config()
+    cfg.reliability.max_imap_attachment_bytes = 0
+    with pytest.raises(ValueError):
+        cfg.validate()

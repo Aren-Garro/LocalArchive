@@ -104,11 +104,21 @@ docker compose up --build
 
 ### Pre-built Binaries (optional)
 
-- GitHub Actions workflow at `.github/workflows/build-binaries.yml` builds one-file CLI binaries for:
+- GitHub Actions workflow at `.github/workflows/build-binaries.yml` builds one-file binaries for:
   - Windows (`windows-latest`)
   - macOS (`macos-latest`)
   - Linux (`ubuntu-latest`)
 - Triggered on tag push (`v*`) or manual workflow dispatch.
+
+### Build Windows GUI `.exe` locally
+
+```bash
+python -m pip install --user pyinstaller
+python -m PyInstaller localarchive.spec --noconfirm
+```
+
+- Output: `dist/LocalArchive.exe`
+- Double-click `LocalArchive.exe` to open a desktop launcher that starts/stops the local web UI.
 
 ### Basic Usage
 
@@ -183,6 +193,9 @@ python -m localarchive classify-evaluate --dataset validation.csv --format csv -
 python -m localarchive serve
 # Browser upload page: http://127.0.0.1:8877/ingest
 # Spanish UI example: http://127.0.0.1:8877/?lang=es
+
+# Launch desktop GUI starter (optional)
+python -m localarchive gui
 
 # Environment and dependency checks
 python -m localarchive doctor

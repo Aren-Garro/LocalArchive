@@ -1,9 +1,9 @@
-# PyInstaller spec for LocalArchive CLI single-file binary.
+# PyInstaller spec for LocalArchive GUI launcher single-file binary.
 
 block_cipher = None
 
 a = Analysis(
-    ["localarchive/cli.py"],
+    ["localarchive/gui_launcher.py"],
     pathex=["."],
     binaries=[],
     datas=[],
@@ -29,7 +29,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

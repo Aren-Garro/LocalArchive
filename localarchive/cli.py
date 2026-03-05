@@ -1,7 +1,7 @@
 """
 LocalArchive CLI - main entry point.
 Commands: init, ingest, search, export, tag, process, classify, reprocess, watch,
-doctor, collections, timeline, audit, verify, backup, serve
+doctor, collections, timeline, audit, verify, backup, serve, gui
 """
 
 import imaplib  # noqa: F401 - compatibility for tests monkeypatching localarchive.cli.imaplib
@@ -1321,6 +1321,14 @@ def serve(host: str, port: int):
     from localarchive.ui.app import app as fastapi_app
 
     uvicorn.run(fastapi_app, host=h, port=p, log_level="warning")
+
+
+@main.command()
+def gui():
+    """Launch desktop GUI starter for the local web UI."""
+    from localarchive.gui_launcher import launch_gui
+
+    launch_gui()
 
 
 if __name__ == "__main__":

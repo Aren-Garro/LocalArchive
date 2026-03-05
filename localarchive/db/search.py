@@ -1,9 +1,14 @@
 """Full-text search engine using SQLite FTS5."""
 
 import re
+import sqlite3
 from difflib import SequenceMatcher
 
 from localarchive.db.database import Database
+
+
+class InvalidSearchQueryError(ValueError):
+    """Raised when a user-provided FTS query has invalid syntax."""
 
 
 class SearchEngine:
@@ -36,7 +41,12 @@ class SearchEngine:
             params.append(status)
         base_query += " ORDER BY rank LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        rows = self.db.conn.execute(base_query, params).fetchall()
+        try:
+            rows = self.db.conn.execute(base_query, params).fetchall()
+        except sqlite3.OperationalError as exc:
+            if self._is_invalid_fts_query_error(exc):
+                raise InvalidSearchQueryError("Invalid search query syntax.") from exc
+            raise
         return [dict(r) for r in rows]
 
     def search_hybrid(
@@ -173,8 +183,22 @@ class SearchEngine:
         if status:
             base_query += " AND d.status = ?"
             params.append(status)
-        row = self.db.conn.execute(base_query, params).fetchone()
+        try:
+            row = self.db.conn.execute(base_query, params).fetchone()
+        except sqlite3.OperationalError as exc:
+            if self._is_invalid_fts_query_error(exc):
+                raise InvalidSearchQueryError("Invalid search query syntax.") from exc
+            raise
         return row["cnt"] if row else 0
+
+    @staticmethod
+    def _is_invalid_fts_query_error(exc: sqlite3.OperationalError) -> bool:
+        msg = str(exc).lower()
+        return (
+            "fts5" in msg
+            or "unterminated string" in msg
+            or "syntax error" in msg
+        )
 
     def recent(self, limit: int = 10, offset: int = 0, status: str | None = None) -> list[dict]:
         return self.db.list_documents(limit=limit, offset=offset, status=status)

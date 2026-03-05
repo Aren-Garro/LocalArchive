@@ -1,7 +1,7 @@
 """Search command implementation."""
 
 from localarchive import cli as c
-from localarchive.db.search import SearchEngine
+from localarchive.db.search import InvalidSearchQueryError, SearchEngine
 
 
 def run_search(
@@ -30,17 +30,35 @@ def run_search(
     engine = SearchEngine(db)
     if semantic:
         bm25_weight, vector_weight = c._validate_hybrid_weights(bm25_weight, vector_weight)
-    if semantic and config.search.enable_semantic:
-        results = engine.search_hybrid(
-            query,
-            limit=max_results,
-            tag=tag,
-            file_type=file_type,
-            bm25_weight=bm25_weight,
-            vector_weight=vector_weight,
-        )
-    else:
-        results = engine.search(query, limit=max_results, tag=tag, file_type=file_type)
+    try:
+        if semantic and config.search.enable_semantic:
+            results = engine.search_hybrid(
+                query,
+                limit=max_results,
+                tag=tag,
+                file_type=file_type,
+                bm25_weight=bm25_weight,
+                vector_weight=vector_weight,
+            )
+        else:
+            results = engine.search(query, limit=max_results, tag=tag, file_type=file_type)
+    except InvalidSearchQueryError as exc:
+        if as_json:
+            c._emit_json(
+                {
+                    "query": query,
+                    "count": 0,
+                    "semantic": bool(semantic and config.search.enable_semantic),
+                    "fuzzy": bool(fuzzy or config.search.enable_fuzzy),
+                    "invalid_query": True,
+                    "error": str(exc),
+                    "results": [],
+                }
+            )
+        else:
+            c.console.print(f"[yellow]{exc}[/yellow]")
+        db.close()
+        return
     fuzzy_enabled = fuzzy or config.search.enable_fuzzy
     if fuzzy_enabled:
         threshold = fuzzy_threshold if fuzzy_threshold is not None else config.search.fuzzy_threshold
@@ -158,4 +176,3 @@ def run_search(
         c.console.print(rank_table)
     c.console.print(f"\n[dim]{len(results)} result(s)[/dim]")
     db.close()
-

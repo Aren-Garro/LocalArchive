@@ -79,6 +79,10 @@ def test_ui_index_and_search():
     assert "invoice.pdf" not in res.text
     assert "0 documents found" in res.text
 
+    res = client.get("/", params={"q": '"'})
+    assert res.status_code == 200
+    assert "0 documents found" in res.text
+
 
 def test_ui_language_switch_to_spanish():
     pytest.importorskip("fastapi")
@@ -261,6 +265,44 @@ def test_ui_ingest_upload():
     db.close()
     assert len(docs) == 1
     assert docs[0]["filename"] == "upload.pdf"
+
+
+def test_ui_ingest_upload_rejects_oversized_file():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi.testclient")
+    from fastapi.testclient import TestClient
+
+    from localarchive.ui.app import create_app
+
+    tmp_path = _workspace_tmp_dir("localarchive-ui-upload-limit")
+    db_path = tmp_path / "ui-upload-limit.db"
+    config = Config(archive_dir=tmp_path / "archive", db_path=db_path)
+    config.ui.max_upload_file_bytes = 10
+    config.archive_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(db_path)
+    db.initialize()
+    db.close()
+
+    app = create_app(config)
+    client = TestClient(app)
+    form = client.get("/ingest")
+    assert form.status_code == 200
+    csrf_token = _csrf_token_from_html(form.text)
+    files = [("files", ("upload.pdf", io.BytesIO(b"%PDF-1.4 file too large"), "application/pdf"))]
+    res = client.post(
+        "/ingest",
+        data={"csrf_token": csrf_token},
+        files=files,
+        headers={"origin": "http://testserver"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+
+    db = Database(db_path)
+    db.initialize()
+    docs = db.list_documents(limit=10)
+    db.close()
+    assert docs == []
 
 
 def test_ui_status_filter_dropdown():

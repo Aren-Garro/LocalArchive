@@ -414,6 +414,127 @@ def test_connectors_imap_ingests_supported_attachment(monkeypatch):
     assert docs[0]["filename"] == "receipt.pdf"
 
 
+def test_connectors_imap_skips_oversized_message(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-imap-message-limit")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.ensure_dirs()
+    config.reliability.max_imap_message_bytes = 50
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    raw = b"X" * 200
+
+    class _FakeIMAP:
+        def __init__(self, _host: str):
+            pass
+
+        def login(self, _username: str, _password: str):
+            return ("OK", [b"logged in"])
+
+        def select(self, _mailbox: str):
+            return ("OK", [b"1"])
+
+        def search(self, _charset, _criteria):
+            return ("OK", [b"1"])
+
+        def fetch(self, _msg_id, _parts):
+            if _parts == "(RFC822.SIZE)":
+                return ("OK", [(b"1 (RFC822.SIZE 200)", b"")])
+            return ("OK", [(b"1 (RFC822 {200})", raw)])
+
+        def logout(self):
+            return ("BYE", [b"logout"])
+
+    monkeypatch.setattr("localarchive.cli.imaplib.IMAP4_SSL", _FakeIMAP)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "connectors",
+            "imap",
+            "--host",
+            "imap.example.com",
+            "--username",
+            "user@example.com",
+            "--password",
+            "secret",
+            "--all",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert int(payload["inspected_messages"]) == 1
+    assert int(payload["ingested"]) == 0
+    assert int(payload["skipped"]) >= 1
+
+
+def test_connectors_imap_skips_oversized_attachment(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-imap-attachment-limit")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    config.ensure_dirs()
+    config.reliability.max_imap_attachment_bytes = 8
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    msg = EmailMessage()
+    msg["Subject"] = "Receipt"
+    msg["From"] = "sender@example.com"
+    msg["To"] = "user@example.com"
+    msg.set_content("Attachment included.")
+    msg.add_attachment(
+        b"%PDF-1.4 larger-than-limit",
+        maintype="application",
+        subtype="pdf",
+        filename="receipt.pdf",
+    )
+    raw = msg.as_bytes()
+
+    class _FakeIMAP:
+        def __init__(self, _host: str):
+            pass
+
+        def login(self, _username: str, _password: str):
+            return ("OK", [b"logged in"])
+
+        def select(self, _mailbox: str):
+            return ("OK", [b"1"])
+
+        def search(self, _charset, _criteria):
+            return ("OK", [b"1"])
+
+        def fetch(self, _msg_id, _parts):
+            if _parts == "(RFC822.SIZE)":
+                return ("OK", [(b"1 (RFC822.SIZE 200)", b"")])
+            return ("OK", [(b"1 (RFC822 {200})", raw)])
+
+        def logout(self):
+            return ("BYE", [b"logout"])
+
+    monkeypatch.setattr("localarchive.cli.imaplib.IMAP4_SSL", _FakeIMAP)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "connectors",
+            "imap",
+            "--host",
+            "imap.example.com",
+            "--username",
+            "user@example.com",
+            "--password",
+            "secret",
+            "--all",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert int(payload["attachments_seen"]) == 1
+    assert int(payload["ingested"]) == 0
+    assert int(payload["skipped"]) >= 1
+
+
 def test_backup_create_dry_run_json_no_side_effects(monkeypatch):
     tmp_path = _workspace_tmp_dir("localarchive-backup-create-dry-run")
     config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
@@ -1081,6 +1202,27 @@ def test_search_json_and_explain_ranking(monkeypatch):
     explained = runner.invoke(main, ["search", "receipt", "--explain-ranking"])
     assert explained.exit_code == 0
     assert "Ranking Explanation" in explained.output
+
+
+def test_search_handles_invalid_fts_query(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-search-invalid")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.close()
+
+    runner = CliRunner()
+    text = runner.invoke(main, ["search", '"'])
+    assert text.exit_code == 0
+    assert "Invalid search query syntax." in text.output
+
+    as_json = runner.invoke(main, ["search", '"', "--json"])
+    assert as_json.exit_code == 0
+    payload = json.loads(as_json.output)
+    assert payload["invalid_query"] is True
+    assert payload["count"] == 0
 
 
 def test_verify_json_reports_issues(monkeypatch):
