@@ -1536,6 +1536,48 @@ def test_graph_entities_json(monkeypatch):
     assert payload["edges"]
 
 
+def test_review_queue_build_list_and_resolve(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-review-queue")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.insert_document(
+        filename="low-confidence.pdf",
+        filepath=str(tmp_path / "low-confidence.pdf"),
+        file_hash="review-low-1",
+        file_type="pdf",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="tiny",
+    )
+    db.close()
+
+    runner = CliRunner()
+    built = runner.invoke(main, ["review", "build", "--json", "--threshold", "0.9"])
+    assert built.exit_code == 0
+    built_payload = json.loads(built.output)
+    assert int(built_payload["queued"]) == 1
+
+    listed = runner.invoke(main, ["review", "list", "--json"])
+    assert listed.exit_code == 0
+    listed_payload = json.loads(listed.output)
+    assert int(listed_payload["count"]) == 1
+    assert int(listed_payload["items"][0]["document_id"]) == 1
+    assert listed_payload["items"][0]["status"] == "pending"
+
+    resolved = runner.invoke(main, ["review", "resolve", "1", "--note", "manually validated"])
+    assert resolved.exit_code == 0
+
+    listed_after = runner.invoke(main, ["review", "list", "--status", "resolved", "--json"])
+    assert listed_after.exit_code == 0
+    listed_after_payload = json.loads(listed_after.output)
+    assert int(listed_after_payload["count"]) == 1
+    assert listed_after_payload["items"][0]["status"] == "resolved"
+
+
 def test_duplicates_scan_detects_near_duplicate_images(monkeypatch):
     pytest.importorskip("PIL")
     from PIL import Image

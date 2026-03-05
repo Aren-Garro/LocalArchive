@@ -149,6 +149,17 @@ CREATE TABLE IF NOT EXISTS backups (
     verified            INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS review_queue (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id       INTEGER NOT NULL UNIQUE REFERENCES documents(id) ON DELETE CASCADE,
+    confidence_score  REAL NOT NULL,
+    reason            TEXT DEFAULT '',
+    status            TEXT NOT NULL DEFAULT 'pending',
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    resolved_note     TEXT DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_doc ON extracted_fields(document_id);
@@ -157,6 +168,7 @@ CREATE INDEX IF NOT EXISTS idx_extracted_tables_doc ON extracted_tables(document
 CREATE INDEX IF NOT EXISTS idx_document_similarity_a ON document_similarity(doc_id_a);
 CREATE INDEX IF NOT EXISTS idx_document_similarity_b ON document_similarity(doc_id_b);
 CREATE INDEX IF NOT EXISTS idx_document_collections_collection ON document_collections(collection_id);
+CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_extracted_fields_dedupe
     ON extracted_fields(document_id, field_type, value, position);
 """

@@ -210,6 +210,9 @@ python -m localarchive plugins list
 python -m localarchive plugins inspect demo_plugin --json
 python -m localarchive connectors imap --host imap.example.com --username user@example.com --dry-run --json
 python -m localarchive graph entities --json
+python -m localarchive review build --threshold 0.55 --json
+python -m localarchive review list --json
+python -m localarchive review resolve 42 --note "validated by operator"
 
 # Timeline view by extracted entity
 python -m localarchive timeline --entity topic
@@ -375,7 +378,7 @@ search_paths = ["~/.localarchive/plugins"]
 - [x] **Entity relationship graphs** — Visualize connections between documents (invoice → payment → receipt)
 - [ ] **Multi-device sync (CRDT)** — Local-first sync without cloud dependency
 - [x] **Duplicate detection** — Perceptual hashing to identify duplicate scans
-- [ ] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
+- [x] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
 - [ ] **Redaction tools** — Privacy-safe document sharing with automated PII removal
 - [ ] **Version control** — Track document changes over time
 - [ ] **Citation extraction** — Auto-build bibliographies from research papers

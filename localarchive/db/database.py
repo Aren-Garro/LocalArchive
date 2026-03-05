@@ -8,7 +8,7 @@ from pathlib import Path
 from localarchive.db.models import SCHEMA_SQL
 from localarchive.utils import file_hash, timestamp_now
 
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
 
 
 class Database:
@@ -182,6 +182,25 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_document_similarity_b ON document_similarity(doc_id_b)"
         )
 
+    def _migrate_v8(self) -> None:
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS review_queue (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id       INTEGER NOT NULL UNIQUE REFERENCES documents(id) ON DELETE CASCADE,
+                confidence_score  REAL NOT NULL,
+                reason            TEXT DEFAULT '',
+                status            TEXT NOT NULL DEFAULT 'pending',
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                resolved_note     TEXT DEFAULT ''
+            )
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status)"
+        )
+
     def _apply_migrations(self) -> None:
         version = self._get_schema_version()
         migrations = (
@@ -192,6 +211,7 @@ class Database:
             (5, self._migrate_v5),
             (6, self._migrate_v6),
             (7, self._migrate_v7),
+            (8, self._migrate_v8),
         )
         for target_version, migration in migrations:
             if version < target_version:
@@ -617,6 +637,60 @@ class Database:
     def delete_backup_record(self, path: str) -> None:
         self.conn.execute("DELETE FROM backups WHERE path = ?", (path,))
         self.conn.commit()
+
+    def upsert_review_item(self, doc_id: int, confidence_score: float, reason: str) -> None:
+        now = timestamp_now()
+        self.conn.execute(
+            """
+            INSERT INTO review_queue(document_id, confidence_score, reason, status, created_at, updated_at, resolved_note)
+            VALUES (?, ?, ?, 'pending', ?, ?, '')
+            ON CONFLICT(document_id) DO UPDATE SET
+                confidence_score = excluded.confidence_score,
+                reason = excluded.reason,
+                status = 'pending',
+                updated_at = excluded.updated_at
+            """,
+            (doc_id, float(confidence_score), str(reason), now, now),
+        )
+        self.conn.commit()
+
+    def list_review_items(self, status: str | None = None, limit: int = 200) -> list[dict]:
+        if status:
+            rows = self.conn.execute(
+                """
+                SELECT rq.*, d.filename, d.file_type, d.status AS document_status
+                FROM review_queue rq
+                JOIN documents d ON d.id = rq.document_id
+                WHERE rq.status = ?
+                ORDER BY rq.updated_at DESC, rq.id DESC
+                LIMIT ?
+                """,
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT rq.*, d.filename, d.file_type, d.status AS document_status
+                FROM review_queue rq
+                JOIN documents d ON d.id = rq.document_id
+                ORDER BY rq.updated_at DESC, rq.id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def resolve_review_item(self, doc_id: int, note: str = "") -> int:
+        cur = self.conn.execute(
+            """
+            UPDATE review_queue
+            SET status = 'resolved', resolved_note = ?, updated_at = ?
+            WHERE document_id = ?
+            """,
+            (str(note), timestamp_now(), int(doc_id)),
+        )
+        self.conn.commit()
+        return int(cur.rowcount)
 
     def upsert_collection(self, name: str, description: str = "") -> int:
         now = timestamp_now()

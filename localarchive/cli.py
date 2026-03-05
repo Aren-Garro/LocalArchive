@@ -1,7 +1,7 @@
 """
 LocalArchive CLI - main entry point.
 Commands: init, ingest, search, export, tag, process, classify, reprocess, watch,
-doctor, collections, timeline, audit, verify, backup, duplicates, graph, serve, gui
+doctor, collections, timeline, audit, verify, backup, duplicates, review, graph, serve, gui
 """
 
 import imaplib  # noqa: F401 - compatibility for tests monkeypatching localarchive.cli.imaplib
@@ -1133,6 +1133,103 @@ def backup():
 def duplicates():
     """Detect likely duplicate scans using perceptual hashes."""
     pass
+
+
+@main.group()
+def review():
+    """Confidence review queue workflows."""
+    pass
+
+
+@review.command("build")
+@click.option("--limit", default=500, type=int, help="Max documents to evaluate.")
+@click.option("--status", default="processed", help="Optional document status filter.")
+@click.option(
+    "--threshold",
+    default=0.55,
+    type=float,
+    help="Queue documents with confidence score below this threshold.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def review_build(limit: int, status: str, threshold: float, as_json: bool):
+    """Compute confidence scores and queue low-confidence documents for manual review."""
+    _validate_limit(limit)
+    _validate_threshold("threshold", threshold)
+    from localarchive.core.validation import score_document_confidence
+
+    config = get_config()
+    db = get_db(config)
+    docs = db.list_documents(limit=limit, status=status or None)
+    queued = 0
+    scanned = 0
+    for doc in docs:
+        scanned += 1
+        fields = db.get_fields(int(doc["id"]))
+        score, reason = score_document_confidence(doc, fields)
+        if score < threshold:
+            db.upsert_review_item(int(doc["id"]), score, reason)
+            queued += 1
+    db.close()
+    payload = {
+        "scanned": scanned,
+        "queued": queued,
+        "threshold": float(threshold),
+        "status_filter": status or "",
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(
+        f"[green]Review queue updated:[/green] scanned={scanned} queued={queued} threshold={threshold:.2f}"
+    )
+
+
+@review.command("list")
+@click.option("--status", default="pending", help="Queue status filter: pending/resolved/all")
+@click.option("--limit", default=100, type=int, help="Max rows to return.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def review_list(status: str, limit: int, as_json: bool):
+    """List review queue items."""
+    _validate_limit(limit)
+    status_norm = status.strip().lower()
+    if status_norm not in {"pending", "resolved", "all"}:
+        raise CLIError("status must be one of: pending, resolved, all", exit_code=2)
+    config = get_config()
+    db = get_db(config)
+    rows = db.list_review_items(status=None if status_norm == "all" else status_norm, limit=limit)
+    db.close()
+    if as_json:
+        _emit_json({"count": len(rows), "status": status_norm, "items": rows})
+        return
+    table = Table(title=f"Review Queue ({status_norm})")
+    table.add_column("Doc ID", style="cyan", width=8)
+    table.add_column("Score", width=8)
+    table.add_column("Status", width=10)
+    table.add_column("Reason", width=30)
+    table.add_column("Filename", style="bold")
+    for row in rows:
+        table.add_row(
+            str(row.get("document_id")),
+            f"{float(row.get('confidence_score', 0.0)):.3f}",
+            str(row.get("status", "")),
+            str(row.get("reason", "")),
+            str(row.get("filename", "")),
+        )
+    console.print(table)
+
+
+@review.command("resolve")
+@click.argument("doc_id", type=int)
+@click.option("--note", default="", help="Resolution note.")
+def review_resolve(doc_id: int, note: str):
+    """Mark a queued document as reviewed/resolved."""
+    config = get_config()
+    db = get_db(config)
+    changed = db.resolve_review_item(doc_id, note=note)
+    db.close()
+    if changed == 0:
+        raise CLIError(f"Review item for document {doc_id} not found.", exit_code=2)
+    console.print(f"[green]Resolved review item for document {doc_id}.[/green]")
 
 
 @duplicates.command("scan")
