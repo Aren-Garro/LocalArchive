@@ -7,6 +7,7 @@ doctor, collections, timeline, audit, verify, backup, duplicates, review, graph,
 import imaplib  # noqa: F401 - compatibility for tests monkeypatching localarchive.cli.imaplib
 import importlib.util
 import json
+import re
 import sqlite3
 import zipfile
 from email.header import decode_header
@@ -227,6 +228,10 @@ def _issue_recommendations(breakdown: dict[str, int]) -> list[str]:
     if not recs:
         recs.append("No action required.")
     return recs
+
+
+def _norm_ref_title(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
 
 
 def _classify_document(doc: dict, fields: list[dict]) -> tuple[str, float, list[str]]:
@@ -2032,15 +2037,27 @@ def import_refs(fmt: str, input_path: Path, as_json: bool):
                 """,
                 (doi,),
             ).fetchone()
+        if row is None and doi:
+            row = db.conn.execute(
+                """
+                SELECT document_id
+                FROM document_metadata
+                WHERE key = 'doi' AND lower(value) = ?
+                LIMIT 1
+                """,
+                (doi,),
+            ).fetchone()
         if row is None and title:
+            norm_title = _norm_ref_title(title)
             row = db.conn.execute(
                 """
                 SELECT dm.document_id
                 FROM document_metadata dm
-                WHERE dm.key = 'title' AND lower(dm.value) = ?
+                WHERE dm.key = 'title'
+                  AND replace(replace(replace(replace(replace(lower(dm.value), ' ', ''), '-', ''), ':', ''), ',', ''), '.', '') = ?
                 LIMIT 1
                 """,
-                (title.lower(),),
+                (norm_title,),
             ).fetchone()
         if row is None and title:
             row = db.conn.execute(

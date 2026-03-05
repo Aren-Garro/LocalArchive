@@ -2209,3 +2209,50 @@ def test_sync_export_log_import_log_status(monkeypatch):
     db.close()
     assert metadata["title"]["value"] == "Remote Updated Title"
     assert any("remote note" in str(n.get("note", "")) for n in notes)
+
+
+def test_import_refs_ris_matches_by_title_metadata(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-import-ris")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "title-match.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="import-ris-1",
+        file_type="pdf",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.set_document_metadata(doc_id, "title", "Imported Ref Title", updated_by="seed")
+    db.close()
+
+    ris = tmp_path / "refs.ris"
+    ris.write_text(
+        "TY  - JOUR\n"
+        "TI  - Imported Ref: Title.\n"
+        "AU  - Grace Hopper\n"
+        "PY  - 2025\n"
+        "DO  - 10.5555/abcde\n"
+        "ER  - \n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["import", "refs", "--format", "ris", "--path", str(ris), "--json"])
+    assert result.exit_code == 0
+    assert '"matched": 1' in result.output
+
+    db = Database(config.db_path)
+    db.initialize()
+    meta = db.get_document_metadata(doc_id)
+    citations = db.list_document_citations(doc_id=doc_id, status="resolved", limit=10)
+    db.close()
+    assert meta["author"]["value"] == "Grace Hopper"
+    assert meta["year"]["value"] == "2025"
+    assert any(str(c["citation_value"]) == "10.5555/abcde" for c in citations)
