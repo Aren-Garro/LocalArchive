@@ -27,6 +27,19 @@ console = Console()
 BACKUP_RESTORE_MAX_MEMBER_BYTES = 256 * 1024 * 1024
 BACKUP_RESTORE_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 BACKUP_RESTORE_MAX_ARCHIVE_FILES = 50000
+SUPPORTED_OCR_LANGUAGES = {
+    "en",
+    "es",
+    "fr",
+    "de",
+    "zh",
+    "ar",
+}
+OCR_LANGUAGE_ALIASES = {
+    "zh-cn": "zh",
+    "zh-hans": "zh",
+    "zh-hant": "zh",
+}
 
 
 class CLIError(click.ClickException):
@@ -125,13 +138,22 @@ def _parse_ocr_languages(raw: str | None, fallback: list[str]) -> list[str]:
     langs = [p for p in parts if p]
     if not langs:
         raise CLIError("`--ocr-languages` must include at least one language code.", exit_code=2)
+    normalized: list[str] = []
     for code in langs:
+        code = OCR_LANGUAGE_ALIASES.get(code, code)
         if not all(ch.isalnum() or ch in {"-", "_"} for ch in code):
             raise CLIError(
                 f"Invalid OCR language code: {code}. Use comma-separated tokens like `en,es,de`.",
                 exit_code=2,
             )
-    return langs
+        if code not in SUPPORTED_OCR_LANGUAGES:
+            supported = ", ".join(sorted(SUPPORTED_OCR_LANGUAGES))
+            raise CLIError(
+                f"Unsupported OCR language code: {code}. Supported codes: {supported}.",
+                exit_code=2,
+            )
+        normalized.append(code)
+    return list(dict.fromkeys(normalized))
 
 
 def _emit_json(payload: dict | list) -> None:
@@ -434,6 +456,13 @@ def tag(doc_id: int, tags: tuple[str]):
     default=None,
     help="Comma-separated OCR language codes for this run (overrides config.ocr.languages).",
 )
+@click.option(
+    "--ocr-engine",
+    "ocr_engine_override",
+    type=click.Choice(["paddleocr", "easyocr"]),
+    default=None,
+    help="OCR backend for this run (overrides config.ocr.engine).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit process run summary as JSON.")
 def process(
     limit: int | None,
@@ -447,6 +476,7 @@ def process(
     resume: bool,
     from_run: int | None,
     ocr_languages: str | None,
+    ocr_engine_override: str | None,
     as_json: bool,
 ):
     """Run OCR and field extraction on pending documents."""
@@ -464,6 +494,7 @@ def process(
         resume=resume,
         from_run=from_run,
         ocr_languages=ocr_languages,
+        ocr_engine_override=ocr_engine_override,
         as_json=as_json,
     )
 

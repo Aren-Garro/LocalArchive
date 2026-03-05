@@ -19,6 +19,8 @@ except ImportError:
 DEFAULT_ARCHIVE_DIR = Path.home() / ".localarchive" / "data"
 DEFAULT_DB_PATH = Path.home() / ".localarchive" / "archive.db"
 DEFAULT_CONFIG_PATH = Path.home() / ".localarchive" / "config.toml"
+SUPPORTED_OCR_ENGINES = {"paddleocr", "easyocr"}
+SUPPORTED_OCR_LANGUAGES = {"en", "es", "fr", "de", "zh", "ar"}
 
 
 def _toml_load_file(config_path: Path) -> dict:
@@ -389,6 +391,7 @@ class Config:
             self.watch.manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     def validate(self) -> None:
+        self._validate_ocr()
         self._validate_extraction()
         self._validate_watch()
         self._validate_runtime()
@@ -404,6 +407,21 @@ class Config:
             raise ValueError(
                 f"Invalid extraction.strategy '{self.extraction.strategy}'. "
                 "Expected one of: hybrid, ollama, regex, spacy"
+            )
+
+    def _validate_ocr(self) -> None:
+        engine = str(self.ocr.engine).strip().lower()
+        if engine not in SUPPORTED_OCR_ENGINES:
+            raise ValueError("ocr.engine must be one of: easyocr, paddleocr")
+        languages = [str(code).strip().lower() for code in self.ocr.languages if str(code).strip()]
+        if not languages:
+            raise ValueError("ocr.languages must include at least one language code")
+        invalid = [code for code in languages if code not in SUPPORTED_OCR_LANGUAGES]
+        if invalid:
+            supported = ", ".join(sorted(SUPPORTED_OCR_LANGUAGES))
+            raise ValueError(
+                f"ocr.languages contains unsupported code(s): {', '.join(invalid)}. "
+                f"Supported: {supported}"
             )
 
     def _validate_watch(self) -> None:

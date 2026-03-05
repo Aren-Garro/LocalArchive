@@ -11,6 +11,20 @@ def test_config_validation_rejects_invalid_strategy():
         cfg.validate()
 
 
+def test_config_validation_rejects_invalid_ocr_engine():
+    cfg = Config()
+    cfg.ocr.engine = "tesseract"
+    with pytest.raises(ValueError):
+        cfg.validate()
+
+
+def test_config_validation_rejects_invalid_ocr_language():
+    cfg = Config()
+    cfg.ocr.languages = ["en", "it"]
+    with pytest.raises(ValueError):
+        cfg.validate()
+
+
 def test_config_validation_accepts_defaults():
     cfg = Config()
     cfg.validate()

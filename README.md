@@ -148,6 +148,7 @@ python -m localarchive process --extract-tables
 # Process in parallel with batched DB commits
 python -m localarchive process --workers 4 --commit-batch-size 20
 python -m localarchive process --ocr-languages en,es
+python -m localarchive process --ocr-languages en,es,fr,de,zh,ar --ocr-engine easyocr
 
 # Dry-run / resume controls for robust long runs
 python -m localarchive process --dry-run
@@ -366,7 +367,7 @@ search_paths = ["~/.localarchive/plugins"]
 - [x] **Table extraction** — Pull structured data from tables in PDFs and images
 - [x] **Document similarity** — Auto-discover related documents in your archive
 - [x] **Enhanced web UI** - Drag-and-drop upload, thumbnail previews, mobile-responsive design
-- [ ] **Multi-language OCR** — Expand beyond English with tested support for Spanish, French, German, Chinese, Arabic
+- [x] **Multi-language OCR** - Expand beyond English with tested support for Spanish, French, German, Chinese, Arabic
 - [x] **Accessibility features** - Screen reader support, keyboard navigation, high-contrast themes
 
 ### Community & Ecosystem (Medium Priority)
@@ -390,6 +391,7 @@ search_paths = ["~/.localarchive/plugins"]
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
 
 
 

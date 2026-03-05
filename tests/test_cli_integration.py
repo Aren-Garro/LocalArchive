@@ -1353,8 +1353,12 @@ def test_process_ocr_languages_override(monkeypatch):
     db.close()
 
     runner = CliRunner()
-    run = runner.invoke(main, ["process", "--json", "--workers", "1", "--ocr-languages", "en,es"])
+    run = runner.invoke(
+        main,
+        ["process", "--json", "--workers", "1", "--ocr-languages", "en,es", "--ocr-engine", "easyocr"],
+    )
     assert run.exit_code == 0
+    assert '"ocr_engine": "easyocr"' in run.output
     assert '"ocr_languages": [' in run.output
     assert '"en"' in run.output
     assert '"es"' in run.output
@@ -1369,6 +1373,24 @@ def test_process_ocr_languages_validation(monkeypatch):
     bad = runner.invoke(main, ["process", "--ocr-languages", "en,*", "--dry-run"])
     assert bad.exit_code == 2
     assert "Invalid OCR language code" in bad.output
+
+    bad2 = runner.invoke(main, ["process", "--ocr-languages", "en,it", "--dry-run"])
+    assert bad2.exit_code == 2
+    assert "Unsupported OCR language code" in bad2.output
+
+
+def test_process_paddle_multi_language_requires_easyocr(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-process-ocr-engine")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["process", "--ocr-languages", "en,es", "--ocr-engine", "paddleocr", "--dry-run"],
+    )
+    assert result.exit_code == 2
+    assert "Use `--ocr-engine easyocr`" in result.output
 
 
 def test_process_extract_tables_persists_results(monkeypatch):

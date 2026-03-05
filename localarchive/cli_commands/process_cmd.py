@@ -21,6 +21,7 @@ def run_process(
     resume: bool,
     from_run: int | None,
     ocr_languages: str | None,
+    ocr_engine_override: str | None,
     as_json: bool,
 ) -> None:
     from localarchive.core.extractor import extract_fields
@@ -47,6 +48,19 @@ def run_process(
     max_error_budget = max_errors if max_errors is not None else config.processing.max_errors_per_run
     c._validate_limit(max_error_budget)
     resolved_ocr_languages = c._parse_ocr_languages(ocr_languages, config.ocr.languages)
+    selected_ocr_engine = ocr_engine_override or config.ocr.engine
+    if selected_ocr_engine not in {"paddleocr", "easyocr"}:
+        raise c.CLIError(
+            "Unsupported OCR engine. Choose from: paddleocr, easyocr.",
+            exit_code=2,
+        )
+    if selected_ocr_engine == "paddleocr" and any(lang != "en" for lang in resolved_ocr_languages):
+        raise c.CLIError(
+            "PaddleOCR run override currently supports only `en` in LocalArchive. "
+            "Use `--ocr-engine easyocr` for multi-language OCR (en/es/fr/de/zh/ar).",
+            exit_code=2,
+        )
+    config.ocr.engine = selected_ocr_engine
     config.ocr.languages = resolved_ocr_languages
     db = c.get_db(config)
     c._run_integrity_check_if_enabled(config, db, "process")
@@ -76,6 +90,7 @@ def run_process(
                     "processed": 0,
                     "errors": 0,
                     "aborted_reason": "",
+                    "ocr_engine": selected_ocr_engine,
                     "ocr_languages": resolved_ocr_languages,
                     "extract_tables": bool(extract_tables),
                     "checkpoint_doc_id": after_doc_id,
@@ -95,6 +110,7 @@ def run_process(
                     "dry_run": True,
                     "count": len(doc_ids),
                     "doc_ids": doc_ids,
+                    "ocr_engine": selected_ocr_engine,
                     "ocr_languages": resolved_ocr_languages,
                     "extract_tables": bool(extract_tables),
                     "resumed_from_run": int(resume_run.get("id")) if resume_run else None,
@@ -106,7 +122,13 @@ def run_process(
         db.close()
         return
     mode = extractor_mode or config.extraction.strategy
-    run_id = db.start_processing_run(engine=config.ocr.engine, extractor=mode)
+    run_id = db.start_processing_run(engine=selected_ocr_engine, extractor=mode)
+    db.add_processing_event(
+        run_id,
+        document_id=None,
+        event_type="config",
+        message=f"ocr_engine={selected_ocr_engine}",
+    )
     db.add_processing_event(
         run_id,
         document_id=None,
@@ -318,6 +340,7 @@ def run_process(
                 "processed": processed_count,
                 "errors": error_count,
                 "aborted_reason": aborted_reason,
+                "ocr_engine": selected_ocr_engine,
                 "ocr_languages": resolved_ocr_languages,
                 "extract_tables": bool(extract_tables),
                 "checkpoint_doc_id": int(run_meta.get("checkpoint_doc_id", 0) or 0),
