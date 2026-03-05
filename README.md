@@ -182,6 +182,9 @@ python -m localarchive search "receipt" --explain-ranking
 # Export results to CSV
 python -m localarchive export --query "receipts" --format csv --output results.csv
 python -m localarchive export --format json --output results.json --include-tables
+python -m localarchive export --format csljson --output refs.csl.json
+python -m localarchive export --format bibtex --output refs.bib
+python -m localarchive export --format ris --output refs.ris
 
 # Tag a document
 python -m localarchive tag DOC_ID "medical" "2024"
@@ -221,6 +224,11 @@ python -m localarchive review build --threshold 0.55 --json
 python -m localarchive review list --json
 python -m localarchive review resolve 42 --note "validated by operator"
 python -m localarchive citations extract --format json
+python -m localarchive citations list --status unresolved --json
+python -m localarchive citations resolve 42 --doi 10.1145/1234567.8901234 --json
+python -m localarchive metadata profiles --json
+python -m localarchive metadata validate 42 --profile research --json
+python -m localarchive metadata edit 42 --field title --value "Paper Title"
 python -m localarchive redaction document 42 --output redacted.txt --json
 python -m localarchive versions record 42 --note "before manual edit"
 python -m localarchive versions list 42 --json

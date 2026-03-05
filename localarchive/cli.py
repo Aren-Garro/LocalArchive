@@ -371,12 +371,24 @@ def search(
 
 @main.command()
 @click.option("--query", default=None, help="Search query to filter export")
-@click.option("--format", "fmt", type=click.Choice(["csv", "json", "markdown"]), default="csv")
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["csv", "json", "markdown", "csljson", "bibtex", "ris"]),
+    default="csv",
+)
 @click.option("--output", "-o", required=True, help="Output file path")
 @click.option("--include-tables", is_flag=True, help="Include extracted tables in exported rows.")
 def export(query: str, fmt: str, output: str, include_tables: bool):
-    """Export documents to CSV, JSON, or Markdown."""
-    from localarchive.core.exporter import export_csv, export_json, export_markdown
+    """Export documents to CSV, JSON, Markdown, CSL-JSON, BibTeX, or RIS."""
+    from localarchive.core.exporter import (
+        export_bibtex,
+        export_csljson,
+        export_csv,
+        export_json,
+        export_markdown,
+        export_ris,
+    )
 
     config = get_config()
     db = get_db(config)
@@ -390,6 +402,14 @@ def export(query: str, fmt: str, output: str, include_tables: bool):
         for doc in documents:
             row = dict(doc)
             row["tables"] = db.get_tables(int(doc["id"]))
+            row["metadata"] = db.get_document_metadata(int(doc["id"]))
+            enriched.append(row)
+        documents = enriched
+    else:
+        enriched = []
+        for doc in documents:
+            row = dict(doc)
+            row["metadata"] = db.get_document_metadata(int(doc["id"]))
             enriched.append(row)
         documents = enriched
     output_path = Path(output)
@@ -399,6 +419,12 @@ def export(query: str, fmt: str, output: str, include_tables: bool):
         export_json(documents, output_path)
     elif fmt == "markdown":
         export_markdown(documents, output_path)
+    elif fmt == "csljson":
+        export_csljson(documents, output_path)
+    elif fmt == "bibtex":
+        export_bibtex(documents, output_path)
+    elif fmt == "ris":
+        export_ris(documents, output_path)
     db.close()
 
 
@@ -953,9 +979,114 @@ def citations():
 
 
 @main.group()
+def metadata():
+    """Metadata profile validation and editing."""
+    pass
+
+
+@main.group()
 def redaction():
     """Privacy-safe redaction tools."""
     pass
+
+
+@metadata.command("profiles")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def metadata_profiles(as_json: bool):
+    """List metadata profiles and required fields."""
+    from localarchive.core.metadata_profiles import list_profiles
+
+    rows = list_profiles()
+    if as_json:
+        _emit_json({"count": len(rows), "profiles": rows})
+        return
+    table = Table(title="Metadata Profiles")
+    table.add_column("Profile", style="cyan", width=14)
+    table.add_column("Required Fields")
+    for row in rows:
+        table.add_row(str(row["id"]), ", ".join(row["required_fields"]))
+    console.print(table)
+
+
+@metadata.command("validate")
+@click.argument("doc_id", type=int)
+@click.option(
+    "--profile",
+    "profile_id",
+    type=click.Choice(["core", "research", "archival"]),
+    default="research",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def metadata_validate(doc_id: int, profile_id: str, as_json: bool):
+    """Validate a document against a metadata profile."""
+    from localarchive.core.metadata_profiles import validate_profile
+
+    config = get_config()
+    db = get_db(config)
+    doc = db.get_document(doc_id)
+    if not doc:
+        db.close()
+        raise CLIError(f"Document {doc_id} not found.", exit_code=2)
+    metadata_map = db.get_document_metadata(doc_id)
+    citations_rows = db.list_document_citations(doc_id=doc_id, limit=200)
+    result = validate_profile(profile_id, metadata_map, citations_rows)
+    payload = {
+        "doc_id": int(doc_id),
+        "filename": str(doc.get("filename", "")),
+        "profile": profile_id,
+        **result,
+    }
+    db.close()
+    if as_json:
+        _emit_json(payload)
+        return
+    if payload["ok"]:
+        console.print(f"[green]Metadata valid:[/green] profile={profile_id} doc={doc_id}")
+        return
+    missing = ", ".join(payload["missing_fields"]) if payload["missing_fields"] else "-"
+    issues = ", ".join(payload["issues"]) if payload["issues"] else "-"
+    console.print(f"[yellow]Metadata issues:[/yellow] profile={profile_id} doc={doc_id}")
+    console.print(f"[dim]missing={missing} issues={issues}[/dim]")
+
+
+@metadata.command("edit")
+@click.argument("doc_id", type=int)
+@click.option("--field", "field_name", required=True, help="Metadata field key.")
+@click.option("--value", "field_value", required=True, help="Metadata value.")
+@click.option("--source", default="manual", help="Metadata source (manual/import/ocr).")
+@click.option("--confidence", default=1.0, type=float, help="Metadata confidence (0-1).")
+@click.option("--updated-by", default="operator", help="Operator identifier.")
+@click.option("--note", default="", help="Optional metadata note to append.")
+def metadata_edit(
+    doc_id: int,
+    field_name: str,
+    field_value: str,
+    source: str,
+    confidence: float,
+    updated_by: str,
+    note: str,
+):
+    """Set or update one metadata field for a document."""
+    if confidence < 0 or confidence > 1:
+        raise CLIError("confidence must be between 0 and 1", exit_code=2)
+    config = get_config()
+    db = get_db(config)
+    doc = db.get_document(doc_id)
+    if not doc:
+        db.close()
+        raise CLIError(f"Document {doc_id} not found.", exit_code=2)
+    db.set_document_metadata(
+        doc_id=doc_id,
+        key=field_name.strip().lower(),
+        value=field_value.strip(),
+        source=source.strip().lower(),
+        confidence=float(confidence),
+        updated_by=updated_by.strip() or "operator",
+    )
+    if note.strip():
+        db.add_metadata_note(doc_id, note.strip())
+    db.close()
+    console.print(f"[green]Metadata updated:[/green] doc={doc_id} {field_name}={field_value}")
 
 
 @main.group()
@@ -1065,7 +1196,16 @@ def citations_extract(limit: int, status: str, fmt: str):
     citations_out: list[dict] = []
     for doc in docs:
         fields = db.get_fields(int(doc["id"]))
-        citations_out.extend(collect_citations(doc, fields))
+        found = collect_citations(doc, fields)
+        citations_out.extend(found)
+        for item in found:
+            db.upsert_document_citation(
+                int(doc["id"]),
+                str(item["type"]).lower(),
+                str(item["value"]).strip(),
+                status="unresolved",
+                resolved_value="",
+            )
     db.close()
 
     deduped: list[dict] = []
@@ -1087,6 +1227,83 @@ def citations_extract(limit: int, status: str, fmt: str):
     for row in deduped:
         lines.append(f"- `{row['type']}` {row['value']} (source: {row['source']})")
     click.echo("\n".join(lines))
+
+
+@citations.command("list")
+@click.option("--status", type=click.Choice(["unresolved", "resolved", "all"]), default="unresolved")
+@click.option("--limit", default=200, type=int, help="Max rows.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def citations_list(status: str, limit: int, as_json: bool):
+    """List extracted citation records."""
+    _validate_limit(limit)
+    config = get_config()
+    db = get_db(config)
+    rows = db.list_document_citations(status=None if status == "all" else status, limit=limit)
+    db.close()
+    if as_json:
+        _emit_json({"count": len(rows), "status": status, "citations": rows})
+        return
+    table = Table(title=f"Citations ({status})")
+    table.add_column("Doc ID", style="cyan", width=8)
+    table.add_column("Type", width=8)
+    table.add_column("Value")
+    table.add_column("Status", width=10)
+    table.add_column("Resolved")
+    table.add_column("Filename", style="bold")
+    for row in rows:
+        table.add_row(
+            str(row.get("document_id", "")),
+            str(row.get("citation_type", "")),
+            str(row.get("citation_value", "")),
+            str(row.get("status", "")),
+            str(row.get("resolved_value", "")),
+            str(row.get("filename", "")),
+        )
+    console.print(table)
+
+
+@citations.command("resolve")
+@click.argument("doc_id", type=int)
+@click.option("--doi", default="", help="Resolved DOI value.")
+@click.option("--arxiv", default="", help="Resolved arXiv value.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def citations_resolve(doc_id: int, doi: str, arxiv: str, as_json: bool):
+    """Resolve citation records for a document."""
+    if not doi.strip() and not arxiv.strip():
+        raise CLIError("Provide --doi and/or --arxiv.", exit_code=2)
+    config = get_config()
+    db = get_db(config)
+    doc = db.get_document(doc_id)
+    if not doc:
+        db.close()
+        raise CLIError(f"Document {doc_id} not found.", exit_code=2)
+    changed = 0
+    if doi.strip():
+        value = doi.strip().lower()
+        db.upsert_document_citation(
+            doc_id=doc_id,
+            citation_type="doi",
+            citation_value=value,
+            status="resolved",
+            resolved_value=value,
+        )
+        changed += 1
+    if arxiv.strip():
+        value = arxiv.strip()
+        db.upsert_document_citation(
+            doc_id=doc_id,
+            citation_type="arxiv",
+            citation_value=value,
+            status="resolved",
+            resolved_value=value,
+        )
+        changed += 1
+    db.close()
+    payload = {"doc_id": doc_id, "resolved_count": changed}
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(f"[green]Resolved citations:[/green] doc={doc_id} count={changed}")
 
 
 @graph.command("entities")
@@ -1325,16 +1542,24 @@ def sync():
 @click.option("--limit", default=500, type=int, help="Max documents to evaluate.")
 @click.option("--status", default="processed", help="Optional document status filter.")
 @click.option(
+    "--profile",
+    "profile_id",
+    type=click.Choice(["default", "research"]),
+    default="default",
+    help="Review profile policy.",
+)
+@click.option(
     "--threshold",
     default=0.55,
     type=float,
     help="Queue documents with confidence score below this threshold.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
-def review_build(limit: int, status: str, threshold: float, as_json: bool):
+def review_build(limit: int, status: str, profile_id: str, threshold: float, as_json: bool):
     """Compute confidence scores and queue low-confidence documents for manual review."""
     _validate_limit(limit)
     _validate_threshold("threshold", threshold)
+    from localarchive.core.metadata_profiles import validate_profile
     from localarchive.core.validation import score_document_confidence
 
     config = get_config()
@@ -1346,6 +1571,14 @@ def review_build(limit: int, status: str, threshold: float, as_json: bool):
         scanned += 1
         fields = db.get_fields(int(doc["id"]))
         score, reason = score_document_confidence(doc, fields)
+        if profile_id == "research":
+            metadata_map = db.get_document_metadata(int(doc["id"]))
+            citations_rows = db.list_document_citations(doc_id=int(doc["id"]), limit=200)
+            profile_result = validate_profile("research", metadata_map, citations_rows)
+            if not profile_result["ok"]:
+                score = min(score, 0.49)
+                extra = ",".join(profile_result["issues"]) or "metadata_profile_invalid"
+                reason = f"{reason},{extra}" if reason else extra
         if score < threshold:
             db.upsert_review_item(int(doc["id"]), score, reason)
             queued += 1
@@ -1355,6 +1588,7 @@ def review_build(limit: int, status: str, threshold: float, as_json: bool):
         "queued": queued,
         "threshold": float(threshold),
         "status_filter": status or "",
+        "profile": profile_id,
     }
     if as_json:
         _emit_json(payload)
@@ -1897,6 +2131,8 @@ def sync_snapshot(output_path: Path, limit: int, as_json: bool):
                 "filename": str(doc.get("filename", "")),
                 "status": str(doc.get("status", "")),
                 "tags": db.get_tags(int(doc["id"])),
+                "metadata": db.get_document_metadata(int(doc["id"])),
+                "notes": db.get_metadata_notes(int(doc["id"])),
             }
         )
     db.close()
@@ -1927,6 +2163,8 @@ def sync_merge(input_path: Path, as_json: bool):
     matched = 0
     updated = 0
     unmatched = 0
+    notes_added = 0
+    metadata_updated = 0
     for entry in docs:
         file_hash_val = str(entry.get("file_hash", "")).strip()
         if not file_hash_val:
@@ -1946,6 +2184,39 @@ def sync_merge(input_path: Path, as_json: bool):
         if merged != existing:
             db.set_tags(doc_id, sorted(merged))
             updated += 1
+        existing_meta = db.get_document_metadata(doc_id)
+        incoming_meta = dict(entry.get("metadata") or {})
+        for key, row in incoming_meta.items():
+            meta_key = str(key).strip().lower()
+            if not meta_key:
+                continue
+            incoming_updated = str(row.get("updated_at", "")).strip()
+            local_updated = str(existing_meta.get(meta_key, {}).get("updated_at", "")).strip()
+            if local_updated and incoming_updated and incoming_updated < local_updated:
+                continue
+            db.set_document_metadata(
+                doc_id=doc_id,
+                key=meta_key,
+                value=str(row.get("value", "")),
+                source=str(row.get("source", "sync") or "sync"),
+                confidence=float(row.get("confidence", 1.0) or 1.0),
+                updated_by=str(row.get("updated_by", "sync") or "sync"),
+                updated_at=incoming_updated or None,
+            )
+            metadata_updated += 1
+        existing_notes = {
+            (str(n.get("note", "")), str(n.get("updated_at", "")))
+            for n in db.get_metadata_notes(doc_id)
+        }
+        for note in list(entry.get("notes") or []):
+            note_text = str(note.get("note", "")).strip()
+            note_updated = str(note.get("updated_at", "")).strip()
+            key = (note_text, note_updated)
+            if not note_text or key in existing_notes:
+                continue
+            db.add_metadata_note(doc_id, note_text, updated_at=note_updated or None)
+            existing_notes.add(key)
+            notes_added += 1
     db.close()
     payload = {
         "merged": True,
@@ -1954,6 +2225,8 @@ def sync_merge(input_path: Path, as_json: bool):
         "matched_docs": matched,
         "updated_docs": updated,
         "unmatched_docs": unmatched,
+        "metadata_updates": metadata_updated,
+        "notes_added": notes_added,
     }
     if as_json:
         _emit_json(payload)

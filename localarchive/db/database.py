@@ -8,7 +8,7 @@ from pathlib import Path
 from localarchive.db.models import SCHEMA_SQL
 from localarchive.utils import file_hash, timestamp_now
 
-LATEST_SCHEMA_VERSION = 9
+LATEST_SCHEMA_VERSION = 10
 
 
 class Database:
@@ -221,6 +221,59 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_document_versions_doc ON document_versions(document_id)"
         )
 
+    def _migrate_v10(self) -> None:
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_metadata (
+                document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                key           TEXT NOT NULL,
+                value         TEXT NOT NULL DEFAULT '',
+                source        TEXT NOT NULL DEFAULT 'manual',
+                confidence    REAL NOT NULL DEFAULT 1.0,
+                updated_by    TEXT NOT NULL DEFAULT 'system',
+                updated_at    TEXT NOT NULL,
+                PRIMARY KEY (document_id, key)
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metadata_notes (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                note          TEXT NOT NULL,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_citations (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                citation_type   TEXT NOT NULL,
+                citation_value  TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'unresolved',
+                resolved_value  TEXT DEFAULT '',
+                updated_at      TEXT NOT NULL,
+                UNIQUE(document_id, citation_type, citation_value)
+            )
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_metadata_doc ON document_metadata(document_id)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_metadata_notes_doc ON metadata_notes(document_id)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_citations_doc ON document_citations(document_id)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_citations_status ON document_citations(status)"
+        )
+
     def _apply_migrations(self) -> None:
         version = self._get_schema_version()
         migrations = (
@@ -233,6 +286,7 @@ class Database:
             (7, self._migrate_v7),
             (8, self._migrate_v8),
             (9, self._migrate_v9),
+            (10, self._migrate_v10),
         )
         for target_version, migration in migrations:
             if version < target_version:
@@ -753,6 +807,140 @@ class Database:
             LIMIT ?
             """,
             (int(doc_id), int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_document_metadata(
+        self,
+        doc_id: int,
+        key: str,
+        value: str,
+        source: str = "manual",
+        confidence: float = 1.0,
+        updated_by: str = "system",
+        updated_at: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO document_metadata(document_id, key, value, source, confidence, updated_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(document_id, key) DO UPDATE SET
+                value = excluded.value,
+                source = excluded.source,
+                confidence = excluded.confidence,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(doc_id),
+                str(key),
+                str(value),
+                str(source),
+                float(confidence),
+                str(updated_by),
+                updated_at or timestamp_now(),
+            ),
+        )
+        self.conn.commit()
+
+    def get_document_metadata(self, doc_id: int) -> dict[str, dict]:
+        rows = self.conn.execute(
+            """
+            SELECT key, value, source, confidence, updated_by, updated_at
+            FROM document_metadata
+            WHERE document_id = ?
+            ORDER BY key
+            """,
+            (int(doc_id),),
+        ).fetchall()
+        return {
+            str(r["key"]): {
+                "value": str(r["value"]),
+                "source": str(r["source"]),
+                "confidence": float(r["confidence"]),
+                "updated_by": str(r["updated_by"]),
+                "updated_at": str(r["updated_at"]),
+            }
+            for r in rows
+        }
+
+    def add_metadata_note(self, doc_id: int, note: str, updated_at: str | None = None) -> int:
+        now = updated_at or timestamp_now()
+        cur = self.conn.execute(
+            """
+            INSERT INTO metadata_notes(document_id, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (int(doc_id), str(note), now, now),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def get_metadata_notes(self, doc_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT id, document_id, note, created_at, updated_at
+            FROM metadata_notes
+            WHERE document_id = ?
+            ORDER BY id ASC
+            """,
+            (int(doc_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_document_citation(
+        self,
+        doc_id: int,
+        citation_type: str,
+        citation_value: str,
+        status: str = "unresolved",
+        resolved_value: str = "",
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO document_citations(document_id, citation_type, citation_value, status, resolved_value, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(document_id, citation_type, citation_value) DO UPDATE SET
+                status = excluded.status,
+                resolved_value = excluded.resolved_value,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(doc_id),
+                str(citation_type),
+                str(citation_value),
+                str(status),
+                str(resolved_value),
+                timestamp_now(),
+            ),
+        )
+        self.conn.commit()
+
+    def list_document_citations(
+        self,
+        doc_id: int | None = None,
+        status: str | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        where: list[str] = []
+        params: list = []
+        if doc_id is not None:
+            where.append("dc.document_id = ?")
+            params.append(int(doc_id))
+        if status:
+            where.append("dc.status = ?")
+            params.append(str(status))
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self.conn.execute(
+            f"""
+            SELECT dc.*, d.filename
+            FROM document_citations dc
+            JOIN documents d ON d.id = dc.document_id
+            {where_sql}
+            ORDER BY dc.updated_at DESC, dc.id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
         ).fetchall()
         return [dict(r) for r in rows]
 

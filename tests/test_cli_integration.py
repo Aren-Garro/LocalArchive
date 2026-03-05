@@ -1901,15 +1901,164 @@ def test_sync_snapshot_and_merge(monkeypatch):
     for item in payload["docs"]:
         if item["file_hash"] == "sync-hash-a":
             item["tags"] = ["local", "remote-added"]
+            item["metadata"] = {
+                "title": {
+                    "value": "Remote Synced Title",
+                    "source": "sync",
+                    "confidence": 1.0,
+                    "updated_by": "remote",
+                    "updated_at": "2026-01-01T00:00:10Z",
+                }
+            }
+            item["notes"] = [
+                {
+                    "note": "Remote archival note",
+                    "updated_at": "2026-01-01T00:00:11Z",
+                }
+            ]
     snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
 
     merged = runner.invoke(main, ["sync", "merge", "--input", str(snapshot_path), "--json"])
     assert merged.exit_code == 0
     assert '"updated_docs": 1' in merged.output
+    assert '"metadata_updates": 1' in merged.output
+    assert '"notes_added": 1' in merged.output
 
     db = Database(config.db_path)
     db.initialize()
     tags = db.get_tags(doc_a)
+    metadata = db.get_document_metadata(doc_a)
+    notes = db.get_metadata_notes(doc_a)
     db.close()
     assert "local" in tags
     assert "remote-added" in tags
+    assert metadata["title"]["value"] == "Remote Synced Title"
+    assert any("Remote archival note" in str(n.get("note", "")) for n in notes)
+
+
+def test_metadata_profiles_validate_and_edit(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-metadata")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "meta.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="meta-1",
+        file_type="pdf",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.close()
+
+    runner = CliRunner()
+    profiles = runner.invoke(main, ["metadata", "profiles", "--json"])
+    assert profiles.exit_code == 0
+    assert '"id": "research"' in profiles.output
+
+    invalid = runner.invoke(main, ["metadata", "validate", str(doc_id), "--profile", "research", "--json"])
+    assert invalid.exit_code == 0
+    assert '"ok": false' in invalid.output
+    assert '"missing_required_metadata"' in invalid.output
+
+    assert runner.invoke(
+        main,
+        ["metadata", "edit", str(doc_id), "--field", "title", "--value", "My Research Paper"],
+    ).exit_code == 0
+    assert runner.invoke(
+        main,
+        ["metadata", "edit", str(doc_id), "--field", "author", "--value", "Ada Lovelace"],
+    ).exit_code == 0
+    assert runner.invoke(
+        main,
+        ["metadata", "edit", str(doc_id), "--field", "year", "--value", "2026", "--note", "verified"],
+    ).exit_code == 0
+
+    valid = runner.invoke(main, ["metadata", "validate", str(doc_id), "--profile", "research", "--json"])
+    assert valid.exit_code == 0
+    assert '"ok": true' in valid.output
+
+
+def test_citations_extract_list_and_resolve(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-citations-resolve")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "cite.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="cite-1",
+        file_type="pdf",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="See DOI 10.1145/1234567.8901234 for details",
+    )
+    db.close()
+
+    runner = CliRunner()
+    extracted = runner.invoke(main, ["citations", "extract", "--format", "json"])
+    assert extracted.exit_code == 0
+    assert '"count"' in extracted.output
+
+    unresolved = runner.invoke(main, ["citations", "list", "--status", "unresolved", "--json"])
+    assert unresolved.exit_code == 0
+    assert '"citation_type": "doi"' in unresolved.output
+
+    resolved = runner.invoke(
+        main,
+        ["citations", "resolve", str(doc_id), "--doi", "10.1145/1234567.8901234", "--json"],
+    )
+    assert resolved.exit_code == 0
+    assert '"resolved_count": 1' in resolved.output
+
+    listed_resolved = runner.invoke(main, ["citations", "list", "--status", "resolved", "--json"])
+    assert listed_resolved.exit_code == 0
+    assert '"status": "resolved"' in listed_resolved.output
+
+
+def test_export_research_formats(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-export-research")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="export-research-1",
+        file_type="pdf",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.set_document_metadata(doc_id, "title", "A Study on Archives", updated_by="test")
+    db.set_document_metadata(doc_id, "author", "Ada Lovelace", updated_by="test")
+    db.set_document_metadata(doc_id, "year", "2026", updated_by="test")
+    db.close()
+
+    runner = CliRunner()
+    csl = tmp_path / "out.csl.json"
+    bib = tmp_path / "out.bib"
+    ris = tmp_path / "out.ris"
+    assert runner.invoke(main, ["export", "--format", "csljson", "--output", str(csl)]).exit_code == 0
+    assert runner.invoke(main, ["export", "--format", "bibtex", "--output", str(bib)]).exit_code == 0
+    assert runner.invoke(main, ["export", "--format", "ris", "--output", str(ris)]).exit_code == 0
+    assert csl.exists()
+    assert bib.exists()
+    assert ris.exists()
+    assert "A Study on Archives" in csl.read_text(encoding="utf-8")
+    assert "@article" in bib.read_text(encoding="utf-8")
+    assert "TY  - JOUR" in ris.read_text(encoding="utf-8")

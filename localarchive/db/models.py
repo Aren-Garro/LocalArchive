@@ -172,6 +172,36 @@ CREATE TABLE IF NOT EXISTS document_versions (
     UNIQUE(document_id, version_no)
 );
 
+CREATE TABLE IF NOT EXISTS document_metadata (
+    document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    key           TEXT NOT NULL,
+    value         TEXT NOT NULL DEFAULT '',
+    source        TEXT NOT NULL DEFAULT 'manual',
+    confidence    REAL NOT NULL DEFAULT 1.0,
+    updated_by    TEXT NOT NULL DEFAULT 'system',
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (document_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS metadata_notes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    note          TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS document_citations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    citation_type   TEXT NOT NULL,
+    citation_value  TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'unresolved',
+    resolved_value  TEXT DEFAULT '',
+    updated_at      TEXT NOT NULL,
+    UNIQUE(document_id, citation_type, citation_value)
+);
+
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_doc ON extracted_fields(document_id);
@@ -182,6 +212,10 @@ CREATE INDEX IF NOT EXISTS idx_document_similarity_b ON document_similarity(doc_
 CREATE INDEX IF NOT EXISTS idx_document_collections_collection ON document_collections(collection_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status);
 CREATE INDEX IF NOT EXISTS idx_document_versions_doc ON document_versions(document_id);
+CREATE INDEX IF NOT EXISTS idx_document_metadata_doc ON document_metadata(document_id);
+CREATE INDEX IF NOT EXISTS idx_metadata_notes_doc ON metadata_notes(document_id);
+CREATE INDEX IF NOT EXISTS idx_document_citations_doc ON document_citations(document_id);
+CREATE INDEX IF NOT EXISTS idx_document_citations_status ON document_citations(status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_extracted_fields_dedupe
     ON extracted_fields(document_id, field_type, value, position);
 """
