@@ -1,7 +1,7 @@
 """
 LocalArchive CLI - main entry point.
 Commands: init, ingest, search, export, tag, process, classify, reprocess, watch,
-doctor, collections, timeline, audit, verify, backup, duplicates, review, graph, citations, serve, gui
+doctor, collections, timeline, audit, verify, backup, duplicates, review, graph, citations, redaction, serve, gui
 """
 
 import imaplib  # noqa: F401 - compatibility for tests monkeypatching localarchive.cli.imaplib
@@ -919,6 +919,49 @@ def graph():
 def citations():
     """Extract citation identifiers and bibliography candidates."""
     pass
+
+
+@main.group()
+def redaction():
+    """Privacy-safe redaction tools."""
+    pass
+
+
+@redaction.command("document")
+@click.argument("doc_id", type=int)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(dir_okay=False, path_type=Path),
+    required=True,
+    help="Output file path for redacted content.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit redaction metadata as JSON.")
+def redaction_document(doc_id: int, output: Path, as_json: bool):
+    """Create a redacted text export for a document."""
+    from localarchive.core.redaction import redact_text
+
+    config = get_config()
+    db = get_db(config)
+    doc = db.get_document(doc_id)
+    db.close()
+    if not doc:
+        raise CLIError(f"Document {doc_id} not found.", exit_code=2)
+    redacted, counts = redact_text(str(doc.get("ocr_text", "") or ""))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(redacted, encoding="utf-8")
+    payload = {
+        "doc_id": int(doc_id),
+        "filename": str(doc.get("filename", "")),
+        "output": str(output),
+        "counts": counts,
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+    console.print(f"[green]Redacted export written:[/green] {output}")
+    console.print(f"[dim]{summary}[/dim]")
 
 
 @citations.command("extract")

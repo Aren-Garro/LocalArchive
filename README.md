@@ -214,6 +214,7 @@ python -m localarchive review build --threshold 0.55 --json
 python -m localarchive review list --json
 python -m localarchive review resolve 42 --note "validated by operator"
 python -m localarchive citations extract --format json
+python -m localarchive redaction document 42 --output redacted.txt --json
 
 # Timeline view by extracted entity
 python -m localarchive timeline --entity topic
@@ -380,7 +381,7 @@ search_paths = ["~/.localarchive/plugins"]
 - [ ] **Multi-device sync (CRDT)** — Local-first sync without cloud dependency
 - [x] **Duplicate detection** — Perceptual hashing to identify duplicate scans
 - [x] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
-- [ ] **Redaction tools** — Privacy-safe document sharing with automated PII removal
+- [x] **Redaction tools** — Privacy-safe document sharing with automated PII removal
 - [ ] **Version control** — Track document changes over time
 - [x] **Citation extraction** — Auto-build bibliographies from research papers
 

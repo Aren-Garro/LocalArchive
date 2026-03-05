@@ -1613,6 +1613,39 @@ def test_citations_extract_json(monkeypatch):
     assert "arxiv" in types
 
 
+def test_redaction_document_export(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-redaction")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.insert_document(
+        filename="pii.txt",
+        filepath=str(tmp_path / "pii.txt"),
+        file_hash="redact-1",
+        file_type="txt",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="Email me at jane@example.com or call 555-123-4567",
+    )
+    db.close()
+
+    out = tmp_path / "redacted.txt"
+    runner = CliRunner()
+    result = runner.invoke(main, ["redaction", "document", "1", "--output", str(out), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["doc_id"] == 1
+    assert out.exists()
+    text = out.read_text(encoding="utf-8")
+    assert "jane@example.com" not in text
+    assert "555-123-4567" not in text
+    assert "[REDACTED_EMAIL]" in text
+    assert "[REDACTED_PHONE]" in text
+
+
 def test_duplicates_scan_detects_near_duplicate_images(monkeypatch):
     pytest.importorskip("PIL")
     from PIL import Image
