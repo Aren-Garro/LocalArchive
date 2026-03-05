@@ -1,7 +1,7 @@
 """
 LocalArchive CLI - main entry point.
 Commands: init, ingest, search, export, tag, process, classify, reprocess, watch,
-doctor, collections, timeline, audit, verify, backup, serve, gui
+doctor, collections, timeline, audit, verify, backup, duplicates, serve, gui
 """
 
 import imaplib  # noqa: F401 - compatibility for tests monkeypatching localarchive.cli.imaplib
@@ -1076,6 +1076,101 @@ def verify(full_verify: bool, as_json: bool):
 def backup():
     """Create or restore local backups."""
     pass
+
+
+@main.group()
+def duplicates():
+    """Detect likely duplicate scans using perceptual hashes."""
+    pass
+
+
+@duplicates.command("scan")
+@click.option("--limit", default=1000, type=int, help="Max documents to inspect.")
+@click.option(
+    "--max-distance",
+    default=6,
+    type=int,
+    help="Max perceptual hash Hamming distance to treat as duplicate.",
+)
+@click.option("--status", default=None, help="Optional document status filter.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def duplicates_scan(limit: int, max_distance: int, status: str | None, as_json: bool):
+    """Scan archive for near-duplicate documents."""
+    if limit < 1:
+        raise CLIError("Limit must be >= 1.", exit_code=2)
+    if max_distance < 0 or max_distance > 64:
+        raise CLIError("max-distance must be between 0 and 64.", exit_code=2)
+
+    from localarchive.core.duplicates import (
+        DuplicateCandidate,
+        find_duplicate_pairs,
+        perceptual_hash_for_file,
+    )
+
+    config = get_config()
+    db = get_db(config)
+    docs = db.list_documents(limit=limit, status=status or None)
+    candidates: list[DuplicateCandidate] = []
+    skipped = 0
+    for doc in docs:
+        file_type = str(doc.get("file_type", "")).lower()
+        if file_type not in {"pdf", "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp", "gif"}:
+            skipped += 1
+            continue
+        path = Path(str(doc.get("filepath", "")))
+        if not path.exists():
+            skipped += 1
+            continue
+        try:
+            phash = perceptual_hash_for_file(path, file_type=file_type)
+        except Exception:
+            skipped += 1
+            continue
+        candidates.append(
+            DuplicateCandidate(
+                doc_id=int(doc["id"]),
+                filename=str(doc.get("filename", "")),
+                filepath=str(path),
+                file_type=file_type,
+                phash=phash,
+            )
+        )
+    db.close()
+    pairs = find_duplicate_pairs(candidates, max_distance=max_distance)
+    if as_json:
+        _emit_json(
+            {
+                "inspected": len(docs),
+                "hashed": len(candidates),
+                "skipped": skipped,
+                "max_distance": max_distance,
+                "duplicates": pairs,
+            }
+        )
+        return
+    if not pairs:
+        console.print(
+            f"[green]No duplicates found.[/green] inspected={len(docs)} hashed={len(candidates)} skipped={skipped}"
+        )
+        return
+    table = Table(title=f"Duplicate Candidates (distance <= {max_distance})")
+    table.add_column("Doc A", style="cyan", width=8)
+    table.add_column("Doc B", style="cyan", width=8)
+    table.add_column("Distance", width=10)
+    table.add_column("File A", style="bold")
+    table.add_column("File B", style="bold")
+    for pair in pairs:
+        table.add_row(
+            str(pair["doc_id_a"]),
+            str(pair["doc_id_b"]),
+            str(pair["distance"]),
+            str(pair["filename_a"]),
+            str(pair["filename_b"]),
+        )
+    console.print(table)
+    console.print(
+        f"\n[dim]inspected={len(docs)} hashed={len(candidates)} skipped={skipped} duplicate_pairs={len(pairs)}[/dim]"
+    )
 
 
 @backup.command("list")

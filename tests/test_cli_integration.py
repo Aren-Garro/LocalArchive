@@ -10,6 +10,7 @@ import zipfile
 from email.message import EmailMessage
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from localarchive.cli import main
@@ -1495,3 +1496,59 @@ def test_similarity_build_and_query(monkeypatch):
     assert related.exit_code == 0
     assert '"doc_id": 1' in related.output
     assert '"related_id": 2' in related.output
+
+
+def test_duplicates_scan_detects_near_duplicate_images(monkeypatch):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    tmp_path = _workspace_tmp_dir("localarchive-duplicates")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    img1 = tmp_path / "dup1.png"
+    img2 = tmp_path / "dup2.png"
+    img3 = tmp_path / "unique.png"
+    Image.new("RGB", (48, 48), color=(20, 40, 220)).save(img1)
+    Image.new("RGB", (48, 48), color=(20, 40, 220)).save(img2)
+    Image.new("RGB", (48, 48), color=(220, 40, 20)).save(img3)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.insert_document(
+        filename=img1.name,
+        filepath=str(img1),
+        file_hash="dup-a",
+        file_type="png",
+        file_size=img1.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.insert_document(
+        filename=img2.name,
+        filepath=str(img2),
+        file_hash="dup-b",
+        file_type="png",
+        file_size=img2.stat().st_size,
+        ingested_at="2026-01-01T00:00:01Z",
+        status="processed",
+    )
+    db.insert_document(
+        filename=img3.name,
+        filepath=str(img3),
+        file_hash="uniq-c",
+        file_type="png",
+        file_size=img3.stat().st_size,
+        ingested_at="2026-01-01T00:00:02Z",
+        status="processed",
+    )
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["duplicates", "scan", "--json", "--max-distance", "1"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert int(payload["hashed"]) == 3
+    assert payload["duplicates"]
+    pair_ids = {(int(p["doc_id_a"]), int(p["doc_id_b"])) for p in payload["duplicates"]}
+    assert (1, 2) in pair_ids

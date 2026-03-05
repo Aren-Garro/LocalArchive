@@ -165,6 +165,8 @@ python -m localarchive process --extractor hybrid
 python -m localarchive search "dentist 2024"
 python -m localarchive similarity build --limit 1000 --top-k 5
 python -m localarchive similarity for 42 --json
+python -m localarchive duplicates scan --max-distance 4
+python -m localarchive duplicates scan --json
 
 # Hybrid search flags (semantic routing if enabled in config)
 python -m localarchive search "graph neural nets" --semantic --bm25-weight 0.6 --vector-weight 0.4
@@ -371,7 +373,7 @@ search_paths = ["~/.localarchive/plugins"]
 ### Advanced Intelligence (Future)
 - [ ] **Entity relationship graphs** — Visualize connections between documents (invoice → payment → receipt)
 - [ ] **Multi-device sync (CRDT)** — Local-first sync without cloud dependency
-- [ ] **Duplicate detection** — Perceptual hashing to identify duplicate scans
+- [x] **Duplicate detection** — Perceptual hashing to identify duplicate scans
 - [ ] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
 - [ ] **Redaction tools** — Privacy-safe document sharing with automated PII removal
 - [ ] **Version control** — Track document changes over time
