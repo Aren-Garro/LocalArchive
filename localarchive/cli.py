@@ -1637,6 +1637,61 @@ def review_list(status: str, limit: int, as_json: bool):
     console.print(table)
 
 
+@review.command("stats")
+@click.option("--top-reasons", default=5, type=int, help="Max pending reason buckets to show.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def review_stats(top_reasons: int, as_json: bool):
+    """Summarize review queue backlog and top pending reasons."""
+    _validate_limit(top_reasons)
+    config = get_config()
+    db = get_db(config)
+    status_rows = db.conn.execute(
+        """
+        SELECT status, COUNT(*) AS count
+        FROM review_queue
+        GROUP BY status
+        """
+    ).fetchall()
+    reasons = db.conn.execute(
+        """
+        SELECT reason, COUNT(*) AS count
+        FROM review_queue
+        WHERE status = 'pending'
+        GROUP BY reason
+        ORDER BY count DESC, reason ASC
+        LIMIT ?
+        """,
+        (top_reasons,),
+    ).fetchall()
+    db.close()
+    status_counts = {str(row["status"]): int(row["count"]) for row in status_rows}
+    pending = int(status_counts.get("pending", 0))
+    resolved = int(status_counts.get("resolved", 0))
+    payload = {
+        "total": pending + resolved,
+        "pending": pending,
+        "resolved": resolved,
+        "top_pending_reasons": [
+            {"reason": str(row["reason"] or "unspecified"), "count": int(row["count"])} for row in reasons
+        ],
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(
+        f"[green]Review queue:[/green] total={payload['total']} pending={pending} resolved={resolved}"
+    )
+    if not payload["top_pending_reasons"]:
+        console.print("[dim]No pending review reasons.[/dim]")
+        return
+    table = Table(title="Top Pending Review Reasons")
+    table.add_column("Reason", style="bold")
+    table.add_column("Count", justify="right")
+    for row in payload["top_pending_reasons"]:
+        table.add_row(str(row["reason"]), str(row["count"]))
+    console.print(table)
+
+
 @review.command("resolve")
 @click.argument("doc_id", type=int)
 @click.option("--note", default="", help="Resolution note.")

@@ -228,6 +228,7 @@ python -m localarchive connectors imap --host imap.example.com --username user@e
 python -m localarchive graph entities --json
 python -m localarchive review build --threshold 0.55 --json
 python -m localarchive review list --json
+python -m localarchive review stats --json
 python -m localarchive review resolve 42 --note "validated by operator"
 python -m localarchive review next --json
 python -m localarchive review complete 7 --note "metadata corrected"

@@ -2336,3 +2336,59 @@ def test_import_refs_dry_run_and_unresolved_report(monkeypatch):
     db.close()
     assert meta == {}
     assert citations == []
+
+
+def test_review_stats_reports_pending_breakdown(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-review-stats")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source_a = tmp_path / "a.pdf"
+    source_b = tmp_path / "b.pdf"
+    source_c = tmp_path / "c.pdf"
+    source_a.write_bytes(b"%PDF-1.4 fake")
+    source_b.write_bytes(b"%PDF-1.4 fake")
+    source_c.write_bytes(b"%PDF-1.4 fake")
+    doc_a = db.insert_document(
+        filename=source_a.name,
+        filepath=str(source_a),
+        file_hash="review-stats-a",
+        file_type="pdf",
+        file_size=source_a.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    doc_b = db.insert_document(
+        filename=source_b.name,
+        filepath=str(source_b),
+        file_hash="review-stats-b",
+        file_type="pdf",
+        file_size=source_b.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    doc_c = db.insert_document(
+        filename=source_c.name,
+        filepath=str(source_c),
+        file_hash="review-stats-c",
+        file_type="pdf",
+        file_size=source_c.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.upsert_review_item(doc_a, confidence_score=0.2, reason="very_short_ocr_text")
+    db.upsert_review_item(doc_b, confidence_score=0.3, reason="very_short_ocr_text")
+    db.upsert_review_item(doc_c, confidence_score=0.4, reason="metadata_profile_invalid")
+    db.resolve_review_item(doc_c, note="handled")
+    db.close()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["review", "stats", "--json"])
+    assert result.exit_code == 0
+    assert '"total": 3' in result.output
+    assert '"pending": 2' in result.output
+    assert '"resolved": 1' in result.output
+    assert '"reason": "very_short_ocr_text"' in result.output
+    assert '"count": 2' in result.output
