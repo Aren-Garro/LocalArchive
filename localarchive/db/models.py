@@ -160,6 +160,18 @@ CREATE TABLE IF NOT EXISTS review_queue (
     resolved_note     TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS document_versions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    version_no      INTEGER NOT NULL,
+    captured_at     TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT '',
+    file_hash       TEXT DEFAULT '',
+    ocr_text        TEXT DEFAULT '',
+    note            TEXT DEFAULT '',
+    UNIQUE(document_id, version_no)
+);
+
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_extracted_fields_doc ON extracted_fields(document_id);
@@ -169,6 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_document_similarity_a ON document_similarity(doc_
 CREATE INDEX IF NOT EXISTS idx_document_similarity_b ON document_similarity(doc_id_b);
 CREATE INDEX IF NOT EXISTS idx_document_collections_collection ON document_collections(collection_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status);
+CREATE INDEX IF NOT EXISTS idx_document_versions_doc ON document_versions(document_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_extracted_fields_dedupe
     ON extracted_fields(document_id, field_type, value, position);
 """

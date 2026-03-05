@@ -8,7 +8,7 @@ from pathlib import Path
 from localarchive.db.models import SCHEMA_SQL
 from localarchive.utils import file_hash, timestamp_now
 
-LATEST_SCHEMA_VERSION = 8
+LATEST_SCHEMA_VERSION = 9
 
 
 class Database:
@@ -201,6 +201,26 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status)"
         )
 
+    def _migrate_v9(self) -> None:
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_versions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id     INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                version_no      INTEGER NOT NULL,
+                captured_at     TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT '',
+                file_hash       TEXT DEFAULT '',
+                ocr_text        TEXT DEFAULT '',
+                note            TEXT DEFAULT '',
+                UNIQUE(document_id, version_no)
+            )
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_document_versions_doc ON document_versions(document_id)"
+        )
+
     def _apply_migrations(self) -> None:
         version = self._get_schema_version()
         migrations = (
@@ -212,6 +232,7 @@ class Database:
             (6, self._migrate_v6),
             (7, self._migrate_v7),
             (8, self._migrate_v8),
+            (9, self._migrate_v9),
         )
         for target_version, migration in migrations:
             if version < target_version:
@@ -385,6 +406,7 @@ class Database:
                 (ocr_text, now, now, doc_id),
             )
             self.replace_fields(doc_id, fields)
+            self._insert_version_snapshot(doc_id=doc_id, ocr_text=ocr_text, note="processed")
             self.conn.commit()
         except Exception:
             self.conn.rollback()
@@ -406,6 +428,7 @@ class Database:
                     (ocr_text, now, now, doc_id),
                 )
                 self.replace_fields(doc_id, fields)
+                self._insert_version_snapshot(doc_id=doc_id, ocr_text=ocr_text, note="processed")
             self.conn.commit()
         except Exception:
             self.conn.rollback()
@@ -691,6 +714,47 @@ class Database:
         )
         self.conn.commit()
         return int(cur.rowcount)
+
+    def _insert_version_snapshot(self, doc_id: int, ocr_text: str, note: str = "") -> None:
+        row = self.conn.execute(
+            "SELECT COALESCE(MAX(version_no), 0) AS v FROM document_versions WHERE document_id = ?",
+            (int(doc_id),),
+        ).fetchone()
+        version_no = int(row["v"]) + 1 if row else 1
+        doc_row = self.conn.execute(
+            "SELECT status, file_hash FROM documents WHERE id = ?",
+            (int(doc_id),),
+        ).fetchone()
+        status = str(doc_row["status"]) if doc_row else ""
+        file_hash_val = str(doc_row["file_hash"]) if doc_row else ""
+        self.conn.execute(
+            """
+            INSERT INTO document_versions(document_id, version_no, captured_at, status, file_hash, ocr_text, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (int(doc_id), int(version_no), timestamp_now(), status, file_hash_val, str(ocr_text), str(note)),
+        )
+
+    def record_document_version(self, doc_id: int, note: str = "") -> int:
+        doc = self.get_document(int(doc_id))
+        if not doc:
+            return 0
+        self._insert_version_snapshot(doc_id=int(doc_id), ocr_text=str(doc.get("ocr_text", "")), note=note)
+        self.conn.commit()
+        return 1
+
+    def list_document_versions(self, doc_id: int, limit: int = 100) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT id, document_id, version_no, captured_at, status, file_hash, note
+            FROM document_versions
+            WHERE document_id = ?
+            ORDER BY version_no DESC
+            LIMIT ?
+            """,
+            (int(doc_id), int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def upsert_collection(self, name: str, description: str = "") -> int:
         now = timestamp_now()

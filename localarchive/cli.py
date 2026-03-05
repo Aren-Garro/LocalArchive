@@ -1,7 +1,7 @@
 """
 LocalArchive CLI - main entry point.
 Commands: init, ingest, search, export, tag, process, classify, reprocess, watch,
-doctor, collections, timeline, audit, verify, backup, duplicates, review, graph, citations, redaction, serve, gui
+doctor, collections, timeline, audit, verify, backup, duplicates, review, graph, citations, redaction, versions, serve, gui
 """
 
 import imaplib  # noqa: F401 - compatibility for tests monkeypatching localarchive.cli.imaplib
@@ -925,6 +925,55 @@ def citations():
 def redaction():
     """Privacy-safe redaction tools."""
     pass
+
+
+@main.group()
+def versions():
+    """Track and inspect document version snapshots."""
+    pass
+
+
+@versions.command("record")
+@click.argument("doc_id", type=int)
+@click.option("--note", default="", help="Optional note for this snapshot.")
+def versions_record(doc_id: int, note: str):
+    """Create a version snapshot for a document."""
+    config = get_config()
+    db = get_db(config)
+    changed = db.record_document_version(doc_id, note=note)
+    db.close()
+    if changed == 0:
+        raise CLIError(f"Document {doc_id} not found.", exit_code=2)
+    console.print(f"[green]Version snapshot recorded for document {doc_id}.[/green]")
+
+
+@versions.command("list")
+@click.argument("doc_id", type=int)
+@click.option("--limit", default=20, type=int, help="Max versions to list.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def versions_list(doc_id: int, limit: int, as_json: bool):
+    """List version snapshots for a document."""
+    _validate_limit(limit)
+    config = get_config()
+    db = get_db(config)
+    rows = db.list_document_versions(doc_id, limit=limit)
+    db.close()
+    if as_json:
+        _emit_json({"doc_id": int(doc_id), "count": len(rows), "versions": rows})
+        return
+    table = Table(title=f"Document Versions: {doc_id}")
+    table.add_column("Version", width=8)
+    table.add_column("Captured At", width=28)
+    table.add_column("Status", width=12)
+    table.add_column("Note")
+    for row in rows:
+        table.add_row(
+            str(row.get("version_no", "")),
+            str(row.get("captured_at", "")),
+            str(row.get("status", "")),
+            str(row.get("note", "")),
+        )
+    console.print(table)
 
 
 @redaction.command("document")

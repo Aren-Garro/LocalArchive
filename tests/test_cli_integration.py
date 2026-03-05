@@ -1646,6 +1646,76 @@ def test_redaction_document_export(monkeypatch):
     assert "[REDACTED_PHONE]" in text
 
 
+def test_versions_record_and_list(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-versions")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    db.insert_document(
+        filename="ver.txt",
+        filepath=str(tmp_path / "ver.txt"),
+        file_hash="ver-1",
+        file_type="txt",
+        file_size=10,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="original text",
+    )
+    db.close()
+
+    runner = CliRunner()
+    rec = runner.invoke(main, ["versions", "record", "1", "--note", "initial"])
+    assert rec.exit_code == 0
+
+    listed = runner.invoke(main, ["versions", "list", "1", "--json"])
+    assert listed.exit_code == 0
+    payload = json.loads(listed.output)
+    assert int(payload["count"]) >= 1
+    assert payload["versions"][0]["note"] == "initial"
+
+
+def test_versions_auto_snapshot_on_process(monkeypatch):
+    class _OCR:
+        def extract_text(self, image_path: Path) -> list[dict]:
+            return [{"text": "processed text", "confidence": 0.9, "bbox": []}]
+
+    tmp_path = _workspace_tmp_dir("localarchive-versions-auto")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+    fake_ocr_module = types.SimpleNamespace(
+        get_ocr_engine=lambda _cfg: _OCR(),
+        pdf_to_images=lambda _path, tmp_dir=None: [],
+        extract_text_from_pdf_native=lambda _path: "",
+    )
+    monkeypatch.setitem(sys.modules, "localarchive.core.ocr_engine", fake_ocr_module)
+
+    db = Database(config.db_path)
+    db.initialize()
+    src = tmp_path / "auto.png"
+    src.write_bytes(b"x")
+    db.insert_document(
+        filename=src.name,
+        filepath=str(src),
+        file_hash="ver-auto-1",
+        file_type="png",
+        file_size=src.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="pending_ocr",
+    )
+    db.close()
+
+    runner = CliRunner()
+    processed = runner.invoke(main, ["process", "--workers", "1"])
+    assert processed.exit_code == 0
+
+    listed = runner.invoke(main, ["versions", "list", "1", "--json"])
+    assert listed.exit_code == 0
+    payload = json.loads(listed.output)
+    assert int(payload["count"]) >= 1
+
+
 def test_duplicates_scan_detects_near_duplicate_images(monkeypatch):
     pytest.importorskip("PIL")
     from PIL import Image

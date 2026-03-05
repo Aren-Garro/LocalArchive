@@ -215,6 +215,8 @@ python -m localarchive review list --json
 python -m localarchive review resolve 42 --note "validated by operator"
 python -m localarchive citations extract --format json
 python -m localarchive redaction document 42 --output redacted.txt --json
+python -m localarchive versions record 42 --note "before manual edit"
+python -m localarchive versions list 42 --json
 
 # Timeline view by extracted entity
 python -m localarchive timeline --entity topic
@@ -382,7 +384,7 @@ search_paths = ["~/.localarchive/plugins"]
 - [x] **Duplicate detection** — Perceptual hashing to identify duplicate scans
 - [x] **Data validation** — Confidence scoring and manual review queues for low-confidence extractions
 - [x] **Redaction tools** — Privacy-safe document sharing with automated PII removal
-- [ ] **Version control** — Track document changes over time
+- [x] **Version control** — Track document changes over time
 - [x] **Citation extraction** — Auto-build bibliographies from research papers
 
 ## License
