@@ -757,6 +757,18 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_review_item_by_id(self, item_id: int) -> dict | None:
+        row = self.conn.execute(
+            """
+            SELECT rq.*, d.filename, d.file_type, d.status AS document_status
+            FROM review_queue rq
+            JOIN documents d ON d.id = rq.document_id
+            WHERE rq.id = ?
+            """,
+            (int(item_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
     def resolve_review_item(self, doc_id: int, note: str = "") -> int:
         cur = self.conn.execute(
             """
@@ -765,6 +777,18 @@ class Database:
             WHERE document_id = ?
             """,
             (str(note), timestamp_now(), int(doc_id)),
+        )
+        self.conn.commit()
+        return int(cur.rowcount)
+
+    def resolve_review_item_by_id(self, item_id: int, note: str = "") -> int:
+        cur = self.conn.execute(
+            """
+            UPDATE review_queue
+            SET status = 'resolved', resolved_note = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (str(note), timestamp_now(), int(item_id)),
         )
         self.conn.commit()
         return int(cur.rowcount)

@@ -2062,3 +2062,150 @@ def test_export_research_formats(monkeypatch):
     assert "A Study on Archives" in csl.read_text(encoding="utf-8")
     assert "@article" in bib.read_text(encoding="utf-8")
     assert "TY  - JOUR" in ris.read_text(encoding="utf-8")
+
+
+def test_import_refs_bibtex_updates_metadata(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-import-refs")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="import-ref-1",
+        file_type="pdf",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.upsert_document_citation(
+        doc_id=doc_id,
+        citation_type="doi",
+        citation_value="10.1145/1234567.8901234",
+        status="unresolved",
+        resolved_value="",
+    )
+    db.close()
+
+    refs = tmp_path / "refs.bib"
+    refs.write_text(
+        "@article{x,\n"
+        "  title = {Imported Ref Title},\n"
+        "  author = {Ada Lovelace},\n"
+        "  year = {2026},\n"
+        "  doi = {10.1145/1234567.8901234}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["import", "refs", "--format", "bibtex", "--path", str(refs), "--json"])
+    assert result.exit_code == 0
+    assert '"matched": 1' in result.output
+
+    db = Database(config.db_path)
+    db.initialize()
+    meta = db.get_document_metadata(doc_id)
+    citations = db.list_document_citations(doc_id=doc_id, status="resolved", limit=10)
+    db.close()
+    assert meta["title"]["value"] == "Imported Ref Title"
+    assert meta["author"]["value"] == "Ada Lovelace"
+    assert meta["year"]["value"] == "2026"
+    assert citations
+
+
+def test_review_next_and_complete(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-review-next")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "review.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="review-next-1",
+        file_type="pdf",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+        ocr_text="tiny",
+    )
+    db.upsert_review_item(doc_id, confidence_score=0.2, reason="very_short_ocr_text")
+    rows = db.list_review_items(status="pending", limit=10)
+    db.close()
+    item_id = int(rows[0]["id"])
+
+    runner = CliRunner()
+    nxt = runner.invoke(main, ["review", "next", "--json"])
+    assert nxt.exit_code == 0
+    assert '"count": 1' in nxt.output
+
+    done = runner.invoke(main, ["review", "complete", str(item_id), "--note", "fixed"])
+    assert done.exit_code == 0
+
+    db = Database(config.db_path)
+    db.initialize()
+    after = db.get_review_item_by_id(item_id)
+    db.close()
+    assert after is not None
+    assert after["status"] == "resolved"
+
+
+def test_sync_export_log_import_log_status(monkeypatch):
+    tmp_path = _workspace_tmp_dir("localarchive-sync-log")
+    config = Config(archive_dir=tmp_path / "archive", db_path=tmp_path / "archive.db")
+    monkeypatch.setattr("localarchive.cli.get_config", lambda: config)
+
+    db = Database(config.db_path)
+    db.initialize()
+    source = tmp_path / "log.pdf"
+    source.write_bytes(b"%PDF-1.4 fake")
+    doc_id = db.insert_document(
+        filename=source.name,
+        filepath=str(source),
+        file_hash="sync-log-1",
+        file_type="pdf",
+        file_size=source.stat().st_size,
+        ingested_at="2026-01-01T00:00:00Z",
+        status="processed",
+    )
+    db.set_document_metadata(doc_id, "title", "Local Title", updated_by="test")
+    db.add_metadata_note(doc_id, "local note")
+    db.close()
+
+    runner = CliRunner()
+    log_path = tmp_path / "sync-log.json"
+    exported = runner.invoke(main, ["sync", "export-log", "--output", str(log_path), "--json"])
+    assert exported.exit_code == 0
+    assert '"written": true' in exported.output
+    assert log_path.exists()
+
+    payload = json.loads(log_path.read_text(encoding="utf-8"))
+    payload["docs"][0]["metadata"]["title"]["value"] = "Remote Updated Title"
+    payload["docs"][0]["metadata"]["title"]["updated_at"] = "2099-01-02T00:00:00Z"
+    payload["docs"][0]["notes"].append({"note": "remote note", "updated_at": "2099-01-02T00:00:01Z"})
+    log_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    imported = runner.invoke(main, ["sync", "import-log", "--path", str(log_path), "--json"])
+    assert imported.exit_code == 0
+    assert '"imported": true' in imported.output
+
+    status = runner.invoke(main, ["sync", "status", "--json"])
+    assert status.exit_code == 0
+    assert '"documents": 1' in status.output
+    assert '"metadata_rows"' in status.output
+
+    db = Database(config.db_path)
+    db.initialize()
+    metadata = db.get_document_metadata(doc_id)
+    notes = db.get_metadata_notes(doc_id)
+    db.close()
+    assert metadata["title"]["value"] == "Remote Updated Title"
+    assert any("remote note" in str(n.get("note", "")) for n in notes)

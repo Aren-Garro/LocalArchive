@@ -218,11 +218,17 @@ python -m localarchive resources list
 python -m localarchive resources show getting-started
 python -m localarchive sync snapshot --output device-sync.json
 python -m localarchive sync merge --input device-sync.json --json
+python -m localarchive sync export-log --output sync-log.json --since 2026-01-01T00:00:00Z
+python -m localarchive sync import-log --path sync-log.json --json
+python -m localarchive sync status --json
+python -m localarchive import refs --format bibtex --path refs.bib --json
 python -m localarchive connectors imap --host imap.example.com --username user@example.com --dry-run --json
 python -m localarchive graph entities --json
 python -m localarchive review build --threshold 0.55 --json
 python -m localarchive review list --json
 python -m localarchive review resolve 42 --note "validated by operator"
+python -m localarchive review next --json
+python -m localarchive review complete 7 --note "metadata corrected"
 python -m localarchive citations extract --format json
 python -m localarchive citations list --status unresolved --json
 python -m localarchive citations resolve 42 --doi 10.1145/1234567.8901234 --json

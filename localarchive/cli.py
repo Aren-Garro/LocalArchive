@@ -1646,6 +1646,41 @@ def review_resolve(doc_id: int, note: str):
     console.print(f"[green]Resolved review item for document {doc_id}.[/green]")
 
 
+@review.command("next")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def review_next(as_json: bool):
+    """Return the next pending review item."""
+    config = get_config()
+    db = get_db(config)
+    rows = db.list_review_items(status="pending", limit=1)
+    db.close()
+    if as_json:
+        _emit_json({"count": len(rows), "item": rows[0] if rows else None})
+        return
+    if not rows:
+        console.print("[dim]No pending review items.[/dim]")
+        return
+    row = rows[0]
+    console.print(
+        f"[yellow]Next review item:[/yellow] id={row.get('id')} doc={row.get('document_id')} "
+        f"score={float(row.get('confidence_score', 0.0)):.3f} reason={row.get('reason', '')}"
+    )
+
+
+@review.command("complete")
+@click.argument("item_id", type=int)
+@click.option("--note", default="", help="Resolution note.")
+def review_complete(item_id: int, note: str):
+    """Resolve a review item by queue item ID."""
+    config = get_config()
+    db = get_db(config)
+    changed = db.resolve_review_item_by_id(item_id, note=note)
+    db.close()
+    if changed == 0:
+        raise CLIError(f"Review item {item_id} not found.", exit_code=2)
+    console.print(f"[green]Resolved review queue item {item_id}.[/green]")
+
+
 @duplicates.command("scan")
 @click.option("--limit", default=1000, type=int, help="Max documents to inspect.")
 @click.option(
@@ -1915,6 +1950,11 @@ def connectors():
     """Integration connectors (email, sync, automation)."""
 
 
+@main.group("import")
+def import_group():
+    """Import external data into LocalArchive."""
+
+
 @main.group()
 def resources():
     """Educational guides and learning resources."""
@@ -1958,6 +1998,94 @@ def resources_show(resource_id: str):
     console.print(f"[bold]{resource.title}[/bold]")
     console.print(f"[dim]{resource.path}[/dim]\n")
     console.print(read_resource_text(resource))
+
+
+@import_group.command("refs")
+@click.option("--format", "fmt", type=click.Choice(["bibtex", "ris"]), required=True)
+@click.option("--path", "input_path", type=click.Path(dir_okay=False, exists=True, path_type=Path), required=True)
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def import_refs(fmt: str, input_path: Path, as_json: bool):
+    """Import reference metadata and map onto local documents."""
+    from localarchive.core.ref_importer import parse_bibtex, parse_ris
+
+    parser = parse_bibtex if fmt == "bibtex" else parse_ris
+    entries = parser(input_path)
+    config = get_config()
+    db = get_db(config)
+    matched = 0
+    updated = 0
+    unresolved = 0
+    for entry in entries:
+        doi = str(entry.get("doi", "")).strip().lower()
+        title = str(entry.get("title", "")).strip()
+        author = str(entry.get("author", "")).strip()
+        year = str(entry.get("year", "")).strip()
+        row = None
+        if doi:
+            row = db.conn.execute(
+                """
+                SELECT document_id
+                FROM document_citations
+                WHERE citation_type = 'doi' AND citation_value = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (doi,),
+            ).fetchone()
+        if row is None and title:
+            row = db.conn.execute(
+                """
+                SELECT dm.document_id
+                FROM document_metadata dm
+                WHERE dm.key = 'title' AND lower(dm.value) = ?
+                LIMIT 1
+                """,
+                (title.lower(),),
+            ).fetchone()
+        if row is None and title:
+            row = db.conn.execute(
+                "SELECT id AS document_id FROM documents WHERE lower(filename) = ? LIMIT 1",
+                (title.lower(),),
+            ).fetchone()
+        if row is None:
+            unresolved += 1
+            continue
+        doc_id = int(row["document_id"])
+        matched += 1
+        if title:
+            db.set_document_metadata(doc_id, "title", title, source="import", confidence=1.0, updated_by="refs")
+            updated += 1
+        if author:
+            db.set_document_metadata(
+                doc_id, "author", author, source="import", confidence=1.0, updated_by="refs"
+            )
+            updated += 1
+        if year:
+            db.set_document_metadata(doc_id, "year", year, source="import", confidence=1.0, updated_by="refs")
+            updated += 1
+        if doi:
+            db.upsert_document_citation(
+                doc_id,
+                citation_type="doi",
+                citation_value=doi,
+                status="resolved",
+                resolved_value=doi,
+            )
+    db.close()
+    payload = {
+        "format": fmt,
+        "input": str(input_path),
+        "entries": len(entries),
+        "matched": matched,
+        "metadata_updates": updated,
+        "unresolved_entries": unresolved,
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(
+        f"[green]References imported:[/green] entries={len(entries)} matched={matched} updated={updated} unresolved={unresolved}"
+    )
 
 
 @main.group()
@@ -2233,6 +2361,168 @@ def sync_merge(input_path: Path, as_json: bool):
         return
     console.print(
         f"[green]Sync merge complete:[/green] matched={matched} updated={updated} unmatched={unmatched}"
+    )
+
+
+@sync.command("export-log")
+@click.option(
+    "--output", "output_path", type=click.Path(dir_okay=False, path_type=Path), required=True
+)
+@click.option("--since", default="", help="Opaque cursor timestamp (ISO).")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def sync_export_log(output_path: Path, since: str, as_json: bool):
+    """Export a log-style sync bundle (cursor-aware snapshot)."""
+    config = get_config()
+    db = get_db(config)
+    docs = db.list_documents(limit=50000)
+    filtered = []
+    for doc in docs:
+        updated_at = str(doc.get("updated_at", ""))
+        if since and updated_at and updated_at <= since:
+            continue
+        filtered.append(doc)
+    payload_docs = []
+    for doc in filtered:
+        payload_docs.append(
+            {
+                "file_hash": str(doc.get("file_hash", "")),
+                "filename": str(doc.get("filename", "")),
+                "updated_at": str(doc.get("updated_at", "")),
+                "tags": db.get_tags(int(doc["id"])),
+                "metadata": db.get_document_metadata(int(doc["id"])),
+                "notes": db.get_metadata_notes(int(doc["id"])),
+            }
+        )
+    db.close()
+    cursor = max([str(d.get("updated_at", "")) for d in filtered], default=since or "")
+    bundle = {
+        "format": "localarchive.sync.log.v1",
+        "cursor": cursor,
+        "since": since,
+        "count": len(payload_docs),
+        "docs": payload_docs,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(bundle, indent=2, ensure_ascii=False), encoding="utf-8")
+    payload = {"written": True, "path": str(output_path), "count": len(payload_docs), "cursor": cursor}
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(f"[green]Sync log written:[/green] {output_path} count={len(payload_docs)}")
+
+
+@sync.command("import-log")
+@click.option(
+    "--path", "input_path", type=click.Path(dir_okay=False, exists=True, path_type=Path), required=True
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def sync_import_log(input_path: Path, as_json: bool):
+    """Import a log-style sync bundle."""
+    raw = json.loads(input_path.read_text(encoding="utf-8"))
+    docs = list(raw.get("docs") or [])
+    config = get_config()
+    db = get_db(config)
+    matched = 0
+    updated = 0
+    unmatched = 0
+    notes_added = 0
+    metadata_updated = 0
+    for entry in docs:
+        file_hash_val = str(entry.get("file_hash", "")).strip()
+        if not file_hash_val:
+            continue
+        row = db.conn.execute(
+            "SELECT id FROM documents WHERE file_hash = ? LIMIT 1",
+            (file_hash_val,),
+        ).fetchone()
+        if not row:
+            unmatched += 1
+            continue
+        matched += 1
+        doc_id = int(row["id"])
+        existing = set(db.get_tags(doc_id))
+        incoming = {str(tag).strip() for tag in (entry.get("tags") or []) if str(tag).strip()}
+        merged = existing | incoming
+        if merged != existing:
+            db.set_tags(doc_id, sorted(merged))
+            updated += 1
+        existing_meta = db.get_document_metadata(doc_id)
+        incoming_meta = dict(entry.get("metadata") or {})
+        for key, meta_row in incoming_meta.items():
+            meta_key = str(key).strip().lower()
+            if not meta_key:
+                continue
+            incoming_updated = str(meta_row.get("updated_at", "")).strip()
+            local_updated = str(existing_meta.get(meta_key, {}).get("updated_at", "")).strip()
+            if local_updated and incoming_updated and incoming_updated < local_updated:
+                continue
+            db.set_document_metadata(
+                doc_id=doc_id,
+                key=meta_key,
+                value=str(meta_row.get("value", "")),
+                source=str(meta_row.get("source", "sync") or "sync"),
+                confidence=float(meta_row.get("confidence", 1.0) or 1.0),
+                updated_by=str(meta_row.get("updated_by", "sync") or "sync"),
+                updated_at=incoming_updated or None,
+            )
+            metadata_updated += 1
+        existing_notes = {
+            (str(n.get("note", "")), str(n.get("updated_at", "")))
+            for n in db.get_metadata_notes(doc_id)
+        }
+        for note in list(entry.get("notes") or []):
+            note_text = str(note.get("note", "")).strip()
+            note_updated = str(note.get("updated_at", "")).strip()
+            key = (note_text, note_updated)
+            if not note_text or key in existing_notes:
+                continue
+            db.add_metadata_note(doc_id, note_text, updated_at=note_updated or None)
+            existing_notes.add(key)
+            notes_added += 1
+    db.close()
+    payload = {
+        "imported": True,
+        "source": str(input_path),
+        "cursor": str(raw.get("cursor", "")),
+        "matched_docs": matched,
+        "updated_docs": updated,
+        "unmatched_docs": unmatched,
+        "metadata_updates": metadata_updated,
+        "notes_added": notes_added,
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(f"[green]Sync log imported:[/green] {input_path}")
+
+
+@sync.command("status")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable output.")
+def sync_status(as_json: bool):
+    """Show local sync-related metadata counts."""
+    config = get_config()
+    db = get_db(config)
+    docs = db.conn.execute("SELECT COUNT(*) AS c FROM documents").fetchone()
+    metadata_rows = db.conn.execute("SELECT COUNT(*) AS c FROM document_metadata").fetchone()
+    notes_rows = db.conn.execute("SELECT COUNT(*) AS c FROM metadata_notes").fetchone()
+    citations_rows = db.conn.execute(
+        "SELECT COUNT(*) AS c FROM document_citations WHERE status = 'unresolved'"
+    ).fetchone()
+    latest = db.conn.execute("SELECT MAX(updated_at) AS ts FROM documents").fetchone()
+    db.close()
+    payload = {
+        "documents": int(docs["c"]) if docs else 0,
+        "metadata_rows": int(metadata_rows["c"]) if metadata_rows else 0,
+        "notes_rows": int(notes_rows["c"]) if notes_rows else 0,
+        "unresolved_citations": int(citations_rows["c"]) if citations_rows else 0,
+        "latest_cursor": str(latest["ts"]) if latest and latest["ts"] else "",
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+    console.print(
+        f"[green]Sync status:[/green] docs={payload['documents']} metadata={payload['metadata_rows']} "
+        f"notes={payload['notes_rows']} unresolved_citations={payload['unresolved_citations']}"
     )
 
 
