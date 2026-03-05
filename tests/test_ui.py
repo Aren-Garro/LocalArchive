@@ -67,7 +67,9 @@ def test_ui_index_and_search():
     assert "LocalArchive" in res.text
     assert "Upload Documents" in res.text
     assert "invoice.pdf" in res.text
+    assert "doc-thumb" in res.text
     assert 'aria-label="Pagination"' in res.text
+    assert 'href="#search-form"' in res.text
     assert "chip processed" in res.text
 
     res = client.get("/", params={"q": "Acme", "tag": "finance", "file_type": "pdf"})
@@ -78,6 +80,7 @@ def test_ui_index_and_search():
     assert res.status_code == 200
     assert "invoice.pdf" not in res.text
     assert "0 documents found" in res.text
+    assert "No documents match your current filters." in res.text
 
     res = client.get("/", params={"q": '"'})
     assert res.status_code == 200
@@ -112,6 +115,31 @@ def test_ui_language_switch_to_spanish():
     assert detail.status_code == 200
     assert "Campos extraidos" in detail.text
     assert "Documentos relacionados" in detail.text
+
+
+def test_ui_theme_toggle_and_cookie():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi.testclient")
+    from fastapi.testclient import TestClient
+
+    from localarchive.ui.app import create_app
+
+    tmp_path = _workspace_tmp_dir("localarchive-ui-theme")
+    db_path = tmp_path / "ui-theme.db"
+    config = Config(archive_dir=tmp_path / "archive", db_path=db_path)
+    db = Database(db_path)
+    db.initialize()
+    _seed_db(db)
+    db.close()
+
+    app = create_app(config)
+    client = TestClient(app)
+
+    res = client.get("/", params={"theme": "contrast"})
+    assert res.status_code == 200
+    assert 'body class="theme-contrast"' in res.text
+    assert "Use default theme" in res.text
+    assert "localarchive_theme=contrast" in res.headers.get("set-cookie", "")
 
 
 def test_ui_document_detail():

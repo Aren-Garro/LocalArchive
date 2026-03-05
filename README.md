@@ -365,9 +365,9 @@ search_paths = ["~/.localarchive/plugins"]
 - [x] **Learned smart classification** — Replace rules with stronger local ML model quality
 - [x] **Table extraction** — Pull structured data from tables in PDFs and images
 - [x] **Document similarity** — Auto-discover related documents in your archive
-- [ ] **Enhanced web UI** — Drag-and-drop upload, thumbnail previews, mobile-responsive design
+- [x] **Enhanced web UI** - Drag-and-drop upload, thumbnail previews, mobile-responsive design
 - [ ] **Multi-language OCR** — Expand beyond English with tested support for Spanish, French, German, Chinese, Arabic
-- [ ] **Accessibility features** — Screen reader support, keyboard navigation, high-contrast themes
+- [x] **Accessibility features** - Screen reader support, keyboard navigation, high-contrast themes
 
 ### Community & Ecosystem (Medium Priority)
 - [x] **Plugin architecture** — Allow community-built extractors, exporters, and custom processors
@@ -390,5 +390,6 @@ search_paths = ["~/.localarchive/plugins"]
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
 
 

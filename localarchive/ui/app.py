@@ -33,11 +33,17 @@ config: Config = None
 _db: Database = None
 search_engine: SearchEngine = None
 SUPPORTED_UI_LANGUAGES = ("en", "es")
+SUPPORTED_UI_THEMES = ("default", "contrast")
 UI_TEXT = {
     "en": {
         "title": "LocalArchive",
         "skip_to_results": "Skip to results",
+        "skip_to_search": "Skip to search",
         "upload_documents": "Upload Documents",
+        "theme_default": "Default Theme",
+        "theme_contrast": "High Contrast",
+        "theme_toggle_to_default": "Use default theme",
+        "theme_toggle_to_contrast": "Use high contrast theme",
         "search_aria": "Document Search",
         "query_placeholder": "Search your documents...",
         "query_label": "Query",
@@ -55,6 +61,7 @@ UI_TEXT = {
         "prev": "Prev",
         "next": "Next",
         "showing": "Showing {start} - {end} of {total}",
+        "no_results": "No documents match your current filters.",
         "back": "Back",
         "back_to_search": "Back to search",
         "upload_title": "Upload Documents",
@@ -85,7 +92,12 @@ UI_TEXT = {
     "es": {
         "title": "LocalArchive",
         "skip_to_results": "Saltar a resultados",
+        "skip_to_search": "Saltar a busqueda",
         "upload_documents": "Subir documentos",
+        "theme_default": "Tema por defecto",
+        "theme_contrast": "Alto contraste",
+        "theme_toggle_to_default": "Usar tema por defecto",
+        "theme_toggle_to_contrast": "Usar tema de alto contraste",
         "search_aria": "Busqueda de documentos",
         "query_placeholder": "Buscar en tus documentos...",
         "query_label": "Consulta",
@@ -103,6 +115,7 @@ UI_TEXT = {
         "prev": "Anterior",
         "next": "Siguiente",
         "showing": "Mostrando {start} - {end} de {total}",
+        "no_results": "No hay documentos que coincidan con los filtros.",
         "back": "Volver",
         "back_to_search": "Volver a busqueda",
         "upload_title": "Subir documentos",
@@ -192,6 +205,14 @@ def _resolve_language(request: Request, requested: str | None = None) -> str:
     return "en"
 
 
+def _resolve_theme(request: Request, requested: str | None = None) -> str:
+    for candidate in (requested, request.cookies.get("localarchive_theme"), "default"):
+        value = (candidate or "").strip().lower()
+        if value in SUPPORTED_UI_THEMES:
+            return value
+    return "default"
+
+
 def _t(language: str, key: str, **kwargs) -> str:
     table = UI_TEXT.get(language, UI_TEXT["en"])
     fallback = UI_TEXT["en"]
@@ -223,6 +244,18 @@ def _with_lang_cookie(response: HTMLResponse, language: str, request: Request) -
     return response
 
 
+def _with_theme_cookie(response: HTMLResponse, theme: str, request: Request) -> HTMLResponse:
+    response.set_cookie(
+        "localarchive_theme",
+        theme,
+        httponly=False,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        path="/",
+    )
+    return response
+
+
 def _validate_csrf(request: Request, csrf_token: str) -> bool:
     cookie_token = request.cookies.get("localarchive_csrf", "")
     return bool(cookie_token) and secrets.compare_digest(cookie_token, csrf_token)
@@ -240,44 +273,79 @@ def create_app(cfg: Config) -> FastAPI:
     return app
 
 
-def _shared_styles() -> str:
+def _shared_styles(theme: str) -> str:
+    _ = theme
     return """
     <style>
+        :root {
+            --bg: #fafafa;
+            --surface: #ffffff;
+            --text: #1a1a1a;
+            --muted: #475569;
+            --link: #1d4ed8;
+            --focus: #0f766e;
+            --border: #e5e7eb;
+            --button: #2563eb;
+            --button-text: #ffffff;
+            --input-border: #d1d5db;
+            --surface-soft: #f8fafc;
+        }
+        body.theme-contrast {
+            --bg: #000000;
+            --surface: #0b0b0b;
+            --text: #ffffff;
+            --muted: #e2e8f0;
+            --link: #93c5fd;
+            --focus: #facc15;
+            --border: #ffffff;
+            --button: #facc15;
+            --button-text: #111827;
+            --input-border: #ffffff;
+            --surface-soft: #111111;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-               max-width: 980px; margin: 0 auto; padding: 1rem; background: #fafafa; color: #1a1a1a; }
+               max-width: 980px; margin: 0 auto; padding: 1rem; background: var(--bg); color: var(--text); }
         .skip-link { position:absolute; left:-10000px; top:auto; width:1px; height:1px; overflow:hidden; }
-        .skip-link:focus { position:static; width:auto; height:auto; margin-bottom:0.75rem; display:inline-block; }
+        .skip-link:focus { position:static; width:auto; height:auto; margin-bottom:0.75rem; display:inline-block; background:var(--surface); padding:0.35rem 0.5rem; border:1px solid var(--border); border-radius:8px; }
         h1 { font-size: 1.6rem; margin-bottom: 1rem; }
-        a { color:#1d4ed8; }
-        :focus-visible { outline: 3px solid #0f766e; outline-offset: 2px; }
+        h2 { margin: 1rem 0 0.5rem 0; font-size: 1.1rem; }
+        a { color: var(--link); }
+        :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
         .topbar { display:flex; justify-content:space-between; align-items:center; gap:0.75rem; margin-bottom:1rem; flex-wrap:wrap; }
-        .btn { padding: 0.6rem 0.9rem; border-radius: 8px; border: 1px solid #2563eb; background: #2563eb; color: white; text-decoration:none; }
-        .btn.secondary { background: white; color:#1d4ed8; }
+        .actions { display:flex; gap:0.5rem; flex-wrap:wrap; }
+        .btn { padding: 0.6rem 0.9rem; border-radius: 8px; border: 1px solid var(--button); background: var(--button); color: var(--button-text); text-decoration:none; }
+        .btn.secondary { background: var(--surface); color: var(--link); }
         .search-box { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
         .search-box input, .search-box select {
-            flex: 1; min-width: 120px; padding: 0.75rem; font-size: 1rem; border: 2px solid #ddd; border-radius: 8px;
+            flex: 1; min-width: 120px; padding: 0.75rem; font-size: 1rem; border: 2px solid var(--input-border); border-radius: 8px;
+            color: var(--text); background: var(--surface);
         }
-        .search-box button { padding: 0.75rem 1rem; font-size: 1rem; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; }
-        .stats { color: #666; margin-bottom: 1rem; font-size: 0.9rem; }
+        .search-box button { padding: 0.75rem 1rem; font-size: 1rem; background: var(--button); color: var(--button-text); border: none; border-radius: 8px; cursor: pointer; }
+        .stats { color: var(--muted); margin-bottom: 1rem; font-size: 0.9rem; }
         .chip { display:inline-flex; align-items:center; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; margin-left:0.4rem; border:1px solid #ddd; }
         .chip.pending_ocr { background:#fff7ed; border-color:#fed7aa; color:#9a3412; }
         .chip.processed { background:#ecfdf5; border-color:#86efac; color:#166534; }
         .chip.error { background:#fef2f2; border-color:#fca5a5; color:#991b1b; }
-        .doc-card { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; }
+        .doc-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; display:grid; grid-template-columns:auto 1fr; gap:0.75rem; align-items:start; }
         .doc-card h3 { font-size: 1rem; margin-bottom: 0.25rem; }
-        .doc-card .meta { color: #666; font-size: 0.85rem; }
-        .doc-card .preview { margin-top: 0.5rem; color: #444; font-size: 0.9rem; background: #f9fafb; padding: 0.5rem; border-radius: 4px; max-height: 100px; overflow: hidden; }
+        .doc-card .meta { color: var(--muted); font-size: 0.85rem; }
+        .doc-card .preview { margin-top: 0.5rem; color: var(--text); font-size: 0.9rem; background: var(--surface-soft); padding: 0.5rem; border-radius: 4px; max-height: 100px; overflow: hidden; }
+        .doc-thumb { width:46px; height:46px; border-radius:10px; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:1.3rem; background:var(--surface-soft); }
         .pager { margin-top:1rem; display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; }
         .pager a[aria-disabled="true"] { color:#94a3b8; pointer-events:none; text-decoration:none; }
-        .panel { background:white; border:1px solid #e5e7eb; border-radius:10px; padding:1rem; }
+        .panel { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1rem; }
         .upload-zone { border: 2px dashed #94a3b8; border-radius: 10px; padding: 1.25rem; background:#f8fafc; }
         .upload-zone.drag { border-color:#0f766e; background:#ecfeff; }
-        .hint { color:#475569; font-size:0.9rem; margin-top:0.5rem; }
+        .hint { color:var(--muted); font-size:0.9rem; margin-top:0.5rem; }
+        .empty { border:1px dashed var(--border); border-radius:10px; padding:1rem; background:var(--surface); color:var(--muted); }
+        .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
         @media (max-width: 768px) {
             body { padding: 0.75rem; }
             .search-box input, .search-box select, .search-box button { width: 100%; min-width: unset; }
             .topbar { align-items: stretch; }
+            .doc-card { grid-template-columns: 1fr; }
+            .doc-thumb { width: 38px; height: 38px; font-size: 1.1rem; }
         }
     </style>
     """
@@ -325,8 +393,24 @@ def _index_stats_text(language: str, q: str, total: int) -> str:
     return _t(language, "stats_archive", total=total, plural=plural)
 
 
+def _theme_toggle(target_theme: str, language: str) -> str:
+    if target_theme == "contrast":
+        return _t(language, "theme_toggle_to_contrast")
+    return _t(language, "theme_toggle_to_default")
+
+
+def _thumbnail_icon(file_type: str) -> str:
+    normalized = (file_type or "").strip().lower()
+    if normalized == "pdf":
+        return "PDF"
+    if normalized in {"png", "jpg", "jpeg", "bmp", "tiff", "gif", "webp"}:
+        return "IMG"
+    return "DOC"
+
+
 def _render_index_page(
     language: str,
+    theme: str,
     q: str,
     tag: str,
     file_type: str,
@@ -340,23 +424,30 @@ def _render_index_page(
     stats_text: str,
     csrf_token: str,
 ) -> str:
+    body_class = "theme-contrast" if theme == "contrast" else "theme-default"
+    toggle_to = "default" if theme == "contrast" else "contrast"
     return f"""<!DOCTYPE html>
 <html lang="{language}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{_t(language, "title")}</title>
-    {_shared_styles()}
+    {_shared_styles(theme)}
 </head>
-<body>
+<body class="{body_class}">
+    <a href="#search-form" class="skip-link">{_t(language, "skip_to_search")}</a>
     <a href="#results" class="skip-link">{_t(language, "skip_to_results")}</a>
     <header class="topbar">
       <h1>&#128230; {_t(language, "title")}</h1>
-      <a class="btn secondary" href="/ingest?lang={language}">{_t(language, "upload_documents")}</a>
+      <div class="actions">
+        <a class="btn secondary" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&lang={language}&theme={toggle_to}&limit={page_limit}&offset={offset}">{_theme_toggle(toggle_to, language)}</a>
+        <a class="btn secondary" href="/ingest?lang={language}&theme={theme}">{_t(language, "upload_documents")}</a>
+      </div>
     </header>
     <main>
-      <form class="search-box" action="/" method="get" aria-label="{_t(language, "search_aria")}">
+      <form id="search-form" class="search-box" action="/" method="get" aria-label="{_t(language, "search_aria")}">
           <input type="hidden" name="lang" value="{language}">
+          <input type="hidden" name="theme" value="{theme}">
           <input type="text" name="q" value="{escape(q)}" placeholder="{_t(language, "query_placeholder")}" autofocus aria-label="{_t(language, "query_label")}">
           <input type="text" name="tag" value="{escape(tag)}" placeholder="{_t(language, "tag_placeholder")}" aria-label="{_t(language, "tag_label")}">
           <input type="text" name="file_type" value="{escape(file_type)}" placeholder="{_t(language, "type_placeholder")}" aria-label="{_t(language, "type_label")}">
@@ -371,12 +462,12 @@ def _render_index_page(
       </form>
       <p class="stats">{stats_text}</p>
       <section id="results" aria-live="polite">
-          {cards}
+          {cards or f"<div class='empty'>{_t(language, 'no_results')}</div>"}
       </section>
       <nav class="pager" aria-label="{_t(language, "pagination_aria")}">
-        <a tabindex="0" aria-disabled="{str(not has_prev).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&lang={language}&limit={page_limit}&offset={max(0, offset - page_limit)}">{_t(language, "prev")}</a>
+        <a tabindex="0" aria-disabled="{str(not has_prev).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&lang={language}&theme={theme}&limit={page_limit}&offset={max(0, offset - page_limit)}">{_t(language, "prev")}</a>
         <span>{_t(language, "showing", start=offset + 1 if total else 0, end=min(offset + page_limit, total), total=total)}</span>
-        <a tabindex="0" aria-disabled="{str(not has_next).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&lang={language}&limit={page_limit}&offset={offset + page_limit}">{_t(language, "next")}</a>
+        <a tabindex="0" aria-disabled="{str(not has_next).lower()}" href="/?q={escape(q)}&tag={escape(tag)}&file_type={escape(file_type)}&status={escape(status)}&lang={language}&theme={theme}&limit={page_limit}&offset={offset + page_limit}">{_t(language, "next")}</a>
       </nav>
       <input type="hidden" name="csrf_token" value="{csrf_token}">
     </main>
@@ -425,8 +516,10 @@ def _render_related_html(doc_id: int) -> str:
 
 
 def _render_document_detail_page(
-    doc: dict, doc_id: int, language: str, csrf_token: str, fields_rows: str, tables_html: str, related_html: str
+    doc: dict, doc_id: int, language: str, theme: str, csrf_token: str, fields_rows: str, tables_html: str, related_html: str
 ) -> str:
+    body_class = "theme-contrast" if theme == "contrast" else "theme-default"
+    toggle_to = "default" if theme == "contrast" else "contrast"
     tags = ", ".join(escape(t) for t in doc.get("tags", [])) or _t(language, "none")
     preview = escape((doc.get("ocr_text") or "")[:5000]).replace("\n", "<br>")
     status = escape(str(doc.get("status", "?")))
@@ -436,10 +529,13 @@ def _render_document_detail_page(
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{escape(doc.get("filename", "Document"))} - LocalArchive</title>
-    {_shared_styles()}
+    {_shared_styles(theme)}
 </head>
-<body>
-    <a href="/?lang={language}" class="btn secondary">{_t(language, "back_to_search")}</a>
+<body class="{body_class}">
+    <div class="actions">
+      <a href="/?lang={language}&theme={theme}" class="btn secondary">{_t(language, "back_to_search")}</a>
+      <a href="/documents/{doc_id}?lang={language}&theme={toggle_to}" class="btn secondary">{_theme_toggle(toggle_to, language)}</a>
+    </div>
     <h1>{escape(doc.get("filename", "Untitled"))}</h1>
     <div class="panel">
       <p><strong>{_t(language, "id_label")}:</strong> {doc["id"]}</p>
@@ -449,12 +545,14 @@ def _render_document_detail_page(
       <form action="/documents/{doc_id}/retry" method="post" style="margin-top:0.75rem;">
           <input type="hidden" name="csrf_token" value="{csrf_token}">
           <input type="hidden" name="lang" value="{language}">
+          <input type="hidden" name="theme" value="{theme}">
           <button class="btn" type="submit">{_t(language, "retry_processing")}</button>
       </form>
       <form action="/documents/{doc_id}/tags" method="post" style="margin-top:0.75rem;">
           <label><strong>{_t(language, "update_tags")}:</strong></label><br>
           <input type="hidden" name="csrf_token" value="{csrf_token}">
           <input type="hidden" name="lang" value="{language}">
+          <input type="hidden" name="theme" value="{theme}">
           <input type="text" name="tags" value="{escape(", ".join(doc.get("tags", [])))}" style="width:100%;max-width:480px;">
           <button class="btn" type="submit">{_t(language, "save_tags")}</button>
       </form>
@@ -482,10 +580,12 @@ async def index(
     file_type: str = "",
     status: str = "",
     lang: str | None = None,
+    theme: str | None = None,
     limit: int | None = None,
     offset: int = 0,
 ):
     language = _resolve_language(request, lang)
+    selected_theme = _resolve_theme(request, theme)
     page_limit = max(1, min(limit or config.ui.default_limit, 200))
     offset = max(0, offset)
     results, total = _fetch_index_results(q, tag, file_type, status, page_limit, offset)
@@ -496,6 +596,7 @@ async def index(
     stats_text = _index_stats_text(language, q, total)
     html = _render_index_page(
         language=language,
+        theme=selected_theme,
         q=q,
         tag=tag,
         file_type=file_type,
@@ -509,12 +610,17 @@ async def index(
         stats_text=stats_text,
         csrf_token=csrf_token,
     )
-    return _with_lang_cookie(_with_csrf_cookie(HTMLResponse(content=html), csrf_token, request), language, request)
+    response = _with_csrf_cookie(HTMLResponse(content=html), csrf_token, request)
+    response = _with_lang_cookie(response, language, request)
+    return _with_theme_cookie(response, selected_theme, request)
 
 
 @app.get("/ingest", response_class=HTMLResponse)
-async def ingest_form(request: Request, lang: str | None = None):
+async def ingest_form(request: Request, lang: str | None = None, theme: str | None = None):
     language = _resolve_language(request, lang)
+    selected_theme = _resolve_theme(request, theme)
+    body_class = "theme-contrast" if selected_theme == "contrast" else "theme-default"
+    toggle_to = "default" if selected_theme == "contrast" else "contrast"
     csrf_token = _ensure_csrf_token(request)
     html = f"""<!DOCTYPE html>
 <html lang="{language}">
@@ -522,15 +628,19 @@ async def ingest_form(request: Request, lang: str | None = None):
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{_t(language, "upload_title")} - {_t(language, "title")}</title>
-    {_shared_styles()}
+    {_shared_styles(selected_theme)}
 </head>
-<body>
-    <a href="/?lang={language}" class="btn secondary">{_t(language, "back")}</a>
+<body class="{body_class}">
+    <div class="actions">
+      <a href="/?lang={language}&theme={selected_theme}" class="btn secondary">{_t(language, "back")}</a>
+      <a href="/ingest?lang={language}&theme={toggle_to}" class="btn secondary">{_theme_toggle(toggle_to, language)}</a>
+    </div>
     <h1>{_t(language, "upload_title")}</h1>
     <div class="panel">
       <form action="/ingest" method="post" enctype="multipart/form-data" aria-label="{_t(language, "upload_title")}">
         <input type="hidden" name="csrf_token" value="{csrf_token}">
         <input type="hidden" name="lang" value="{language}">
+        <input type="hidden" name="theme" value="{selected_theme}">
         <div class="upload-zone" id="upload-zone">
           <p><strong>{_t(language, "drag_drop_hint")}</strong> {_t(language, "or_choose_hint")}</p>
           <input id="file-input" type="file" name="files" multiple aria-label="{_t(language, "upload_documents")}">
@@ -561,7 +671,9 @@ async def ingest_form(request: Request, lang: str | None = None):
     </script>
 </body>
 </html>"""
-    return _with_lang_cookie(_with_csrf_cookie(HTMLResponse(content=html), csrf_token, request), language, request)
+    response = _with_csrf_cookie(HTMLResponse(content=html), csrf_token, request)
+    response = _with_lang_cookie(response, language, request)
+    return _with_theme_cookie(response, selected_theme, request)
 
 
 @app.post("/ingest")
@@ -570,16 +682,24 @@ async def ingest_upload(
     files: list[UploadFile] = File(default=[]),
     csrf_token: str = Form(default=""),
     lang: str = Form(default=""),
+    theme: str = Form(default=""),
 ):
     language = _resolve_language(request, lang)
+    selected_theme = _resolve_theme(request, theme)
     if not _has_trusted_source(request) or not _validate_csrf(request, csrf_token):
-        return _with_lang_cookie(
+        response = _with_lang_cookie(
             HTMLResponse(content=f"<h1>{_t(language, 'forbidden')}</h1>", status_code=403),
             language,
             request,
         )
+        return _with_theme_cookie(response, selected_theme, request)
     if not files:
-        return _with_lang_cookie(RedirectResponse(url=f"/ingest?lang={language}", status_code=303), language, request)
+        response = _with_lang_cookie(
+            RedirectResponse(url=f"/ingest?lang={language}&theme={selected_theme}", status_code=303),
+            language,
+            request,
+        )
+        return _with_theme_cookie(response, selected_theme, request)
     ingester = Ingester(config, _db)
     max_upload_bytes = int(config.ui.max_upload_file_bytes)
     for upload in files:
@@ -613,19 +733,26 @@ async def ingest_upload(
             except Exception:
                 pass
             await upload.close()
-    return _with_lang_cookie(RedirectResponse(url=f"/?lang={language}", status_code=303), language, request)
+    response = _with_lang_cookie(
+        RedirectResponse(url=f"/?lang={language}&theme={selected_theme}", status_code=303),
+        language,
+        request,
+    )
+    return _with_theme_cookie(response, selected_theme, request)
 
 
 @app.get("/documents/{doc_id}", response_class=HTMLResponse)
-async def document_detail(request: Request, doc_id: int, lang: str | None = None):
+async def document_detail(request: Request, doc_id: int, lang: str | None = None, theme: str | None = None):
     language = _resolve_language(request, lang)
+    selected_theme = _resolve_theme(request, theme)
     doc = _db.get_document_detail(doc_id)
     if not doc:
-        return _with_lang_cookie(
+        response = _with_lang_cookie(
             HTMLResponse(content=f"<h1>{_t(language, 'document_not_found')}</h1>", status_code=404),
             language,
             request,
         )
+        return _with_theme_cookie(response, selected_theme, request)
     fields_rows = _render_fields_rows(doc, language)
     tables_html = _render_tables_html(doc, language)
     related_html = _render_related_html(doc_id)
@@ -635,39 +762,50 @@ async def document_detail(request: Request, doc_id: int, lang: str | None = None
             doc=doc,
             doc_id=doc_id,
             language=language,
+            theme=selected_theme,
             csrf_token=csrf_token,
             fields_rows=fields_rows,
             tables_html=tables_html,
             related_html=related_html,
         )
     )
-    return _with_lang_cookie(_with_csrf_cookie(response, csrf_token, request), language, request)
+    response = _with_csrf_cookie(response, csrf_token, request)
+    response = _with_lang_cookie(response, language, request)
+    return _with_theme_cookie(response, selected_theme, request)
 
 
 @app.post("/documents/{doc_id}/retry")
 async def retry_document(
-    request: Request, doc_id: int, csrf_token: str = Form(default=""), lang: str = Form(default="")
+    request: Request,
+    doc_id: int,
+    csrf_token: str = Form(default=""),
+    lang: str = Form(default=""),
+    theme: str = Form(default=""),
 ):
     language = _resolve_language(request, lang)
+    selected_theme = _resolve_theme(request, theme)
     if not _has_trusted_source(request) or not _validate_csrf(request, csrf_token):
-        return _with_lang_cookie(
+        response = _with_lang_cookie(
             HTMLResponse(content=f"<h1>{_t(language, 'forbidden')}</h1>", status_code=403),
             language,
             request,
         )
+        return _with_theme_cookie(response, selected_theme, request)
     doc = _db.get_document(doc_id)
     if not doc:
-        return _with_lang_cookie(
+        response = _with_lang_cookie(
             HTMLResponse(content=f"<h1>{_t(language, 'document_not_found')}</h1>", status_code=404),
             language,
             request,
         )
+        return _with_theme_cookie(response, selected_theme, request)
     _db.mark_for_reprocess([doc_id])
-    return _with_lang_cookie(
-        RedirectResponse(url=f"/documents/{doc_id}?lang={language}", status_code=303),
+    response = _with_lang_cookie(
+        RedirectResponse(url=f"/documents/{doc_id}?lang={language}&theme={selected_theme}", status_code=303),
         language,
         request,
     )
+    return _with_theme_cookie(response, selected_theme, request)
 
 
 @app.post("/documents/{doc_id}/tags")
@@ -677,37 +815,47 @@ async def update_document_tags(
     tags: str = Form(default=""),
     csrf_token: str = Form(default=""),
     lang: str = Form(default=""),
+    theme: str = Form(default=""),
 ):
     language = _resolve_language(request, lang)
+    selected_theme = _resolve_theme(request, theme)
     if not _has_trusted_source(request) or not _validate_csrf(request, csrf_token):
-        return _with_lang_cookie(
+        response = _with_lang_cookie(
             HTMLResponse(content=f"<h1>{_t(language, 'forbidden')}</h1>", status_code=403),
             language,
             request,
         )
+        return _with_theme_cookie(response, selected_theme, request)
     doc = _db.get_document(doc_id)
     if not doc:
-        return _with_lang_cookie(
+        response = _with_lang_cookie(
             HTMLResponse(content=f"<h1>{_t(language, 'document_not_found')}</h1>", status_code=404),
             language,
             request,
         )
+        return _with_theme_cookie(response, selected_theme, request)
     parsed = [tag.strip() for tag in tags.split(",")]
     _db.set_tags(doc_id, parsed)
-    return _with_lang_cookie(
-        RedirectResponse(url=f"/documents/{doc_id}?lang={language}", status_code=303),
+    response = _with_lang_cookie(
+        RedirectResponse(url=f"/documents/{doc_id}?lang={language}&theme={selected_theme}", status_code=303),
         language,
         request,
     )
+    return _with_theme_cookie(response, selected_theme, request)
 
 
 def _render_card(doc: dict, language: str) -> str:
     preview = escape((doc.get("ocr_text") or "")[: config.ui.show_preview_chars])
     preview_html = f'<div class="preview">{preview}</div>' if preview else ""
     status = escape(str(doc.get("status", "?")))
+    file_type = escape(str(doc.get("file_type", "?")))
+    thumb = _thumbnail_icon(str(doc.get("file_type", "")))
     return f"""
     <article class="doc-card">
-        <h3><a href="/documents/{doc["id"]}?lang={language}" tabindex="0">{escape(doc.get("filename", "Untitled"))}</a><span class="chip {status}">{status}</span></h3>
-        <p class="meta">{_t(language, "id_label")}: {doc["id"]} &middot; {escape(str(doc.get("file_type", "?")))} &middot; {escape(str(doc.get("ingested_at", "")))}</p>
-        {preview_html}
+        <div class="doc-thumb" aria-hidden="true">{thumb}</div>
+        <div>
+          <h3><a href="/documents/{doc["id"]}?lang={language}" tabindex="0">{escape(doc.get("filename", "Untitled"))}</a><span class="chip {status}">{status}</span></h3>
+          <p class="meta">{_t(language, "id_label")}: {doc["id"]} &middot; {file_type} &middot; {escape(str(doc.get("ingested_at", "")))}</p>
+          {preview_html}
+        </div>
     </article>"""
